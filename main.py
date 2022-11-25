@@ -211,7 +211,6 @@ class Server:
         self.responses = list()
 
         self.operation_finished = False
-        self.request_thread_closed = False
 
     def set_partition(self, cluster_trees):
         self.cluster_partitions = cluster_trees
@@ -226,7 +225,7 @@ class Server:
         self.handle_connection()
 
     def handle_connection(self):
-        while not self.request_thread_closed:
+        while not self.operation_finished:
             readable, writeable, exceptions = select.select(self.read_socks, self.write_socks, self.read_socks)
             for sock in readable:
                 if sock is self.main_sock:
@@ -258,11 +257,9 @@ class Server:
                         print(f"[DATA RECEIVED] client: {data}")
                     else:
                         self.close_sock(sock)
-                        print(f"[CONNECTION CLOSED] {sock} has been closed...")
 
             for sock in exceptions:
                 self.close_sock(sock)
-                print(f"[CONNECTION CLOSED] {sock} has been closed due to an exception...")
         for sock in self.read_socks:
             self.close_sock(sock)
 
@@ -289,19 +286,22 @@ class Server:
         return data
 
     def outgoing_requests(self):
-        while not self.operation_finished:
+        op_code = 5
+        while True:
             time.sleep(0.01)
             if not self.clients_queue.empty():
                 sock = self.clients_queue.get()
                 if sock in self.write_socks:
-                    op_code = 5
-                    partition = self.cluster_partitions[self.partition_index]
                     global_vars = self.request_queue.get()
+                    if not global_vars:
+                        self.clients_queue.put(sock)
+                        break
+                    partition = self.cluster_partitions[self.partition_index]
                     partition.set_global_vars(str(global_vars))
                     tree = partition.finalize()
                     self.send_msg(sock, op_code, tree)
                     self.sock_to_tree[sock] = global_vars
-        self.request_thread_closed = True
+        self.operation_finished = True
 
     def outgoing_response(self, sock):
         while not self.request_queue.empty():
@@ -312,7 +312,7 @@ class Server:
         print(f"[RESPONSE SENT] data: {response}")
 
         if len(self.cluster_partitions) - 1 == self.partition_index:
-            self.operation_finished = True
+            self.request_queue.put(None)
         else:
             self.partition_index += 1
 
@@ -321,6 +321,7 @@ class Server:
             self.write_socks.remove(sock)
         self.read_socks.remove(sock)
         sock.close()
+        print(f"[CONNECTION CLOSED] {sock} has been closed...")
 
 
 class ExecutableTree:
@@ -344,9 +345,6 @@ class ExecutableTree:
             f.write(ast.unparse(tree))
 
         return ast.parse(ast.unparse(tree))
-
-    def find_changed_vars(self, new_variables):
-        pass
 
 
 def string_to_ast_node(string):

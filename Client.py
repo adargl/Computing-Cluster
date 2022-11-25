@@ -23,19 +23,20 @@ class Client:
         self.handle_connection()
 
     def handle_connection(self):
+        self.declare_ready()
         while True:
-            try:
-                self.declare_ready()
-                tree, op_code = self.recv_msg(self.conn_sock)
-            except (ConnectionResetError, TypeError):
+            packet = self.recv_msg(self.conn_sock)
+            if packet:
+                tree, op_code = packet
+                if op_code == 5:
+                    exec_tree(tree)
+                    self.send_response()
+                    self.executed_count += 1
+                    self.declare_ready()
+                print(f"[DATA RECEIVED] server: {tree}")
+            else:
+                self.conn_sock.close()
                 break
-            print(f"[DATA RECEIVED] server: {tree}")
-            if op_code == 5:
-                exec_tree(tree)
-                self.send_response()
-                self.executed_count += 1
-
-        self.conn_sock.close()
 
     def send_msg(self, sock, op_code, msg):
         pickled_msg = pickle.dumps(msg)
