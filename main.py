@@ -11,7 +11,24 @@ from threading import Thread
 import astpretty
 
 
-class ClusterModifier(ast.NodeTransformer):
+class ClusterModifier(ast.NodeVisitor):
+    class Loop:
+        def __init__(self, node):
+            self.node = node
+            self.is_within_func = False
+            self.func_node = None
+            self.is_nested = False
+
+        def __str__(self):
+            return f"Within_func: {self.is_within_func}, Nested: {self.is_nested} |"
+
+        def set_within_func(self, func_node):
+            self.is_within_func = True
+            self.func_node = func_node
+
+        def set_nested(self):
+            self.is_nested = True
+
     def __init__(self):
         self.module_node = None
         self.names = {"global_vars": "global_variables", "mediator_class": "ClusterMediator",
@@ -22,16 +39,24 @@ class ClusterModifier(ast.NodeTransformer):
         self.current_func = None
         self.func_start_line = 0
         self.func_end_line = 0
-        self.current_for = None
-        self.for_start_line = 0
-        self.for_end_line = 0
+        self.current_loop = None
+        self.loop_start_line = 0
+        self.loop_end_line = 0
 
         self.imports = {"import": [], "from": []}
-        self.for_calls = list()  # [(for_node, True if nested False otherwise)]
-        self.variables = set()  # {"variable name"}
+        self.loops = list()
         self.functions = dict()  # {"function name": (func_node, True if used False otherwise)}
+        self.variables = set()  # {"variable name"}
         self.builtin_funcs = set()  # {"function name"}
 
+    def function_name(func):
+        def wrapper(*args, **kwargs):
+            print("Running:", func.__name__)
+            func(*args, **kwargs)
+
+        return wrapper
+
+    @function_name
     def visit_Module(self, node):
         self.module_node = node
         count = 0
@@ -43,7 +68,7 @@ class ClusterModifier(ast.NodeTransformer):
         while isinstance(node.body[count], (ast.Import, ast.ImportFrom)):
             count += 1
         self.helper_func_node = string_to_ast_node(
-                f"""def {self.names['helper_func']}({self.names['mediator_object']}, {self.names['global_vars']}):
+            f"""def {self.names['helper_func']}({self.names['global_vars']}):
         {self.names['mediator_object']}.{self.names['request_func']}({self.names['global_vars']})""")
 
         node.body.insert(count, self.helper_func_node)
@@ -52,65 +77,71 @@ class ClusterModifier(ast.NodeTransformer):
         new_obj_node = string_to_ast_node(f"{self.names['mediator_object']} = {self.names['mediator_class']}()")
         node.body.insert(count, new_obj_node)
 
-        ast.fix_missing_locations(node)
         self.generic_visit(node)
-        return node
 
+    @function_name
     def visit_Import(self, node):
         self.imports["import"].append(node)
-        return node
 
+    @function_name
     def visit_ImportFrom(self, node):
         self.imports["from"].append(node)
-        return node
 
-    def visit_FunctionDef(self, node):
+    @function_name
+    def visit_FunctionDef(self, node, initial=True):
         # Update the current function with every new definition
-        self.current_func = node.name
-        self.func_start_line = node.lineno
-        self.func_end_line = node.end_lineno
-        # Add to tree functions
-        self.functions[node.name] = (node, False)
-        return node
+        if initial:
+            self.current_func = node
+            self.func_start_line = node.lineno
+            self.func_end_line = node.end_lineno
+            # Add to tree functions
+            self.functions[node.name] = node, False
+        else:
+            self.generic_visit(node)
 
+    @function_name
     def visit_For(self, node):
-        # Update the current for with every occurrence
-        if not self.func_start_line < node.lineno <= self.func_end_line:
-            if not self.for_start_line < node.lineno <= self.for_end_line:
-                self.current_for = node
-                self.for_start_line = node.lineno
-                self.for_end_line = node.end_lineno
-                self.for_calls.append((node, False))
-                if isinstance(node.target, ast.Name):
-                    self.variables.add(node.target.id)
-                self.generic_visit(node)
-            else:
-                for_node, is_nested = self.for_calls[-1]
-                self.for_calls[-1] = for_node, True
-                if isinstance(node.target, ast.Name):
-                    self.builtin_funcs.add(node.target.id)
-        return node
+        if not self.loop_start_line < node.lineno <= self.loop_end_line:
+            self.current_loop = node
+            self.loop_start_line = node.lineno
+            self.loop_end_line = node.end_lineno
+            loop = self.Loop(node)
+            self.loops.append(loop)
+            if self.func_start_line < node.lineno <= self.func_end_line:
+                loop.set_within_func(self.current_func)
+            if isinstance(node.target, ast.Name):
+                self.variables.add(node.target.id)
+            self.generic_visit(node)
+        else:
+            loop = self.loops[-1]
+            loop.set_nested()
+            if isinstance(node.target, ast.Name):
+                self.builtin_funcs.add(node.target.id)
 
+    @function_name
     def visit_Assign(self, node):
-        if not self.for_start_line < node.lineno <= self.for_end_line:
+        if not self.loop_start_line < node.lineno <= self.loop_end_line:
             self.variables.update([child_node.id for child_node in node.targets if isinstance(child_node, ast.Name)])
         self.generic_visit(node)
-        return node
 
+    @function_name
     def visit_Call(self, node):
         # Modify node
-        if self.for_start_line <= node.lineno <= self.for_end_line and isinstance(node.func, ast.Name):
-            if node.func.id in self.functions.keys():
-                for_node, is_nested = self.for_calls[-1]
-                self.for_calls[-1] = for_node, True
-                func_name = node.func.id
-                func_node, is_used = self.functions[func_name]
-                self.functions[func_name] = func_node, True
-                self.find_nested_functions(func_node)
+        if isinstance(node.func, ast.Name) and node.func.id in self.functions.keys():
+            func_name = node.func.id
+            func_node, is_used = self.functions[func_name]
+            self.functions[func_name] = func_node, True
+            if self.loop_start_line <= node.lineno <= self.loop_end_line:
+                if node.func.id in self.functions.keys():
+                    loop = self.loops[-1]
+                    loop.set_nested()
+                    self.find_nested_functions(func_node)
+                else:
+                    self.builtin_funcs.add(node.func.id)
             else:
-                self.builtin_funcs.add(node.func.id)
+                print("Visited:", func_name)
+                self.visit_FunctionDef(func_node, False)
         self.generic_visit(node)
-        return node
 
     def find_nested_functions(self, node):
         for child_node in ast.walk(node):
@@ -120,16 +151,16 @@ class ClusterModifier(ast.NodeTransformer):
                 self.functions[child_node.func.id] = func_node, True
                 self.find_nested_functions(func_node)
 
-    def create_cluster_partitions(self):
-        print(self.for_calls)
+    def create_partitions(self):
         partitions = []
         global_variables = set()  # All variables that need to be sent to the cluster client
         variables_dict = "{"  # Maps global vars to their values
         variables_assign = []
-        for for_call, is_nested in self.for_calls:
-            if is_nested:
+        for loop in self.loops:
+            if loop.is_nested:
                 # Find all variable names
-                for name in ast.walk(for_call):
+                loop_node = loop.node
+                for name in ast.walk(loop_node):
                     if isinstance(name, ast.Name) and name.id in self.variables and not \
                             (name.id in self.functions.keys() or name.id in self.builtin_funcs):
                         global_variables.add(name.id)
@@ -142,41 +173,45 @@ class ClusterModifier(ast.NodeTransformer):
 
                 variables_dict = variables_dict[:-2] + "}"
 
-                # Replace the for
-                index = get_node_index(self.module_node, for_call)
                 assign_node = string_to_ast_node(
                     f"""for key, val in {self.names['global_vars']}.items():
                 exec(key + '=val')""")
                 await_response_node = string_to_ast_node(
                     f"{self.names['global_vars']} = {self.names['mediator_object']}."
                     f"{self.names['end_partition_func']}()")
-                self.module_node.body.insert(index + 1, assign_node)
-                self.module_node.body.insert(index + 1, await_response_node)
+
+                # Replace the for
+                if loop.is_within_func:
+                    index = get_node_index(loop.func_node, loop_node)
+                    body = loop.func_node.body
+                else:
+                    index = get_node_index(self.module_node, loop_node)
+                    body = self.module_node.body
+                body.insert(index + 1, assign_node)
+                body.insert(index + 1, await_response_node)
                 func_call = string_to_ast_node(
-                    f"""{self.names['helper_func']}({self.names['mediator_object']}, {variables_dict})""")
+                    f"""{self.names['helper_func']}({variables_dict})""")
 
-                copy_of_for = deepcopy(for_call)
-                for_call.body = [func_call]
+                loop_copy = deepcopy(loop_node)
+                loop_node.body = [func_call]
 
-                with_node = string_to_ast_node(
+                with_node = [string_to_ast_node(
                     f"""with open('{self.names['client_file']}', 'w') as file:
-                file.write(str({variables_dict}))""")
+                file.write(str({variables_dict}))""")]
 
                 imports_and_functions = [j for i in self.imports.values() for j in i] + \
                                         [func_node for func_node, is_used in self.functions.values() if is_used]
 
                 # Create the new tree
                 partition = ast.Module(
-                    body=imports_and_functions + variables_assign + copy_of_for.body + [with_node],
+                    body=imports_and_functions + variables_assign + loop_copy.body + with_node,
                     type_ignores=[]
                 )
-                partition = ast.fix_missing_locations(partition)
                 partitions.append(ExecutableTree(partition, len(imports_and_functions), self.names['global_vars']))
 
                 global_variables.clear()
                 variables_dict = "{"
                 variables_assign = []
-
         return partitions
 
 
@@ -189,7 +224,6 @@ class Server:
     #  4      |  notify readiness
     #  5      |  exec tree request
     #  6      |  exec tree response
-    #  7      |  operation finished
 
     def __init__(self, port=55555, send_format="utf-8", buffer_size=1024, max_queue=5):
         self.ip = socket.gethostbyname(socket.gethostname())
@@ -246,7 +280,7 @@ class Server:
                         if op_code == 1:
                             self.request_queue.put(data)
                         elif op_code == 3:
-                            Thread(target=self.outgoing_response, args=(sock, )).start()
+                            Thread(target=self.outgoing_response, args=(sock,)).start()
                         elif op_code == 4:
                             self.clients_queue.put(sock)
                         elif op_code == 6:
@@ -368,16 +402,18 @@ def print_tree(tree):
 
 
 if __name__ == '__main__':
-    file = "CaesarCipher.py"
+    file = "Testing.py"
     modified_file = "Modified_File.py"
     cluster_file = "Cluster_Partition.py"
     with open(file) as source:
         ast_tree = ast.parse(source.read())
 
     Modifier = ClusterModifier()
-    ast_tree = Modifier.visit(ast_tree)
-    ast_tree = ast.fix_missing_locations(ast_tree)
-    cluster_partitions = Modifier.create_cluster_partitions()
+    Modifier.visit(ast_tree)
+    cluster_partitions = Modifier.create_partitions()
+    print("Loops:", *Modifier.loops)
+    print("Variables:", Modifier.variables)
+    print("Functions:", Modifier.functions)
 
     if cluster_partitions:
         server = Server()
