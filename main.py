@@ -13,21 +13,37 @@ import astpretty
 
 class ClusterModifier(ast.NodeVisitor):
     class Loop:
-        def __init__(self, node):
+        def __init__(self, node, start_line, end_line):
             self.node = node
+            self.start_line = start_line
+            self.end_line = end_line
             self.is_within_func = False
-            self.func_node = None
+            self.function = None
             self.is_nested = False
 
         def __str__(self):
             return f"Within_func: {self.is_within_func}, Nested: {self.is_nested} |"
 
-        def set_within_func(self, func_node):
+        def set_within_func(self, function):
             self.is_within_func = True
-            self.func_node = func_node
+            self.function = function
 
         def set_nested(self):
             self.is_nested = True
+
+    class Function:
+        def __init__(self, node, name, start_line, end_line):
+            self.node = node
+            self.name = name
+            self.start_line = start_line
+            self.end_line = end_line
+            self.is_used = False
+
+        def __str__(self):
+            return f"Func_Name: {self.name}, Used: {self.is_used} |"
+
+        def set_used(self):
+            self.is_used = True
 
     def __init__(self):
         self.module_node = None
@@ -36,12 +52,8 @@ class ClusterModifier(ast.NodeVisitor):
                       "end_partition_func": "partition_finished", "client_file": "shared.txt"}
 
         self.helper_func_node = None
-        self.current_func = None
-        self.func_start_line = 0
-        self.func_end_line = 0
-        self.current_loop = None
-        self.loop_start_line = 0
-        self.loop_end_line = 0
+        self.current_func = self.Function(None, None, 0, 0)
+        self.current_loop = self.Loop(None, 0, 0)
 
         self.imports = {"import": [], "from": []}
         self.loops = list()
@@ -56,7 +68,6 @@ class ClusterModifier(ast.NodeVisitor):
 
         return wrapper
 
-    @function_name
     def visit_Module(self, node):
         self.module_node = node
         count = 0
@@ -79,35 +90,29 @@ class ClusterModifier(ast.NodeVisitor):
 
         self.generic_visit(node)
 
-    @function_name
     def visit_Import(self, node):
         self.imports["import"].append(node)
 
-    @function_name
     def visit_ImportFrom(self, node):
         self.imports["from"].append(node)
 
-    @function_name
     def visit_FunctionDef(self, node, initial=True):
         # Update the current function with every new definition
         if initial:
-            self.current_func = node
-            self.func_start_line = node.lineno
-            self.func_end_line = node.end_lineno
+            function = self.Function(node, node.name, node.lineno, node.end_lineno)
+            self.current_func = function
             # Add to tree functions
-            self.functions[node.name] = node, False
+            self.functions[node.name] = function
         else:
+            self.current_func = self.functions[node.name]
             self.generic_visit(node)
 
-    @function_name
     def visit_For(self, node):
-        if not self.loop_start_line < node.lineno <= self.loop_end_line:
-            self.current_loop = node
-            self.loop_start_line = node.lineno
-            self.loop_end_line = node.end_lineno
-            loop = self.Loop(node)
+        if not self.current_loop.start_line < node.lineno <= self.current_loop.end_line:
+            loop = self.Loop(node, node.lineno, node.end_lineno)
             self.loops.append(loop)
-            if self.func_start_line < node.lineno <= self.func_end_line:
+            self.current_loop = loop
+            if self.current_func.start_line < node.lineno <= self.current_func.end_line:
                 loop.set_within_func(self.current_func)
             if isinstance(node.target, ast.Name):
                 self.variables.add(node.target.id)
@@ -118,38 +123,36 @@ class ClusterModifier(ast.NodeVisitor):
             if isinstance(node.target, ast.Name):
                 self.builtin_funcs.add(node.target.id)
 
-    @function_name
     def visit_Assign(self, node):
-        if not self.loop_start_line < node.lineno <= self.loop_end_line:
+        if not self.current_loop.start_line < node.lineno <= self.current_loop.end_line:
             self.variables.update([child_node.id for child_node in node.targets if isinstance(child_node, ast.Name)])
         self.generic_visit(node)
 
-    @function_name
     def visit_Call(self, node):
         # Modify node
         if isinstance(node.func, ast.Name) and node.func.id in self.functions.keys():
             func_name = node.func.id
-            func_node, is_used = self.functions[func_name]
-            self.functions[func_name] = func_node, True
-            if self.loop_start_line <= node.lineno <= self.loop_end_line:
+            function = self.functions[func_name]
+            function.set_used()
+            if self.current_loop.start_line < node.lineno <= self.current_loop.end_line:
                 if node.func.id in self.functions.keys():
                     loop = self.loops[-1]
                     loop.set_nested()
-                    self.find_nested_functions(func_node)
+                    self.find_nested_functions(function.node)
                 else:
                     self.builtin_funcs.add(node.func.id)
             else:
-                print("Visited:", func_name)
-                self.visit_FunctionDef(func_node, False)
+                print("Visiting:", func_name)
+                self.visit_FunctionDef(function.node, False)
         self.generic_visit(node)
 
     def find_nested_functions(self, node):
         for child_node in ast.walk(node):
             if isinstance(child_node, ast.Call) and isinstance(child_node.func, ast.Name) \
                     and child_node.func.id in self.functions.keys():
-                func_node, is_used = self.functions[child_node.func.id]
-                self.functions[child_node.func.id] = func_node, True
-                self.find_nested_functions(func_node)
+                function = self.functions[child_node.func.id]
+                function.set_used()
+                self.find_nested_functions(function.node)
 
     def create_partitions(self):
         partitions = []
@@ -182,8 +185,9 @@ class ClusterModifier(ast.NodeVisitor):
 
                 # Replace the for
                 if loop.is_within_func:
-                    index = get_node_index(loop.func_node, loop_node)
-                    body = loop.func_node.body
+                    func_node = loop.function.node
+                    index = get_node_index(func_node, loop_node)
+                    body = func_node.body
                 else:
                     index = get_node_index(self.module_node, loop_node)
                     body = self.module_node.body
@@ -199,15 +203,15 @@ class ClusterModifier(ast.NodeVisitor):
                     f"""with open('{self.names['client_file']}', 'w') as file:
                 file.write(str({variables_dict}))""")]
 
-                imports_and_functions = [j for i in self.imports.values() for j in i] + \
-                                        [func_node for func_node, is_used in self.functions.values() if is_used]
+                imports = [j for i in self.imports.values() for j in i]
+                functions = [function.node for function in self.functions.values() if function.is_used]
 
                 # Create the new tree
                 partition = ast.Module(
-                    body=imports_and_functions + variables_assign + loop_copy.body + with_node,
+                    body=imports + functions + variables_assign + loop_copy.body + with_node,
                     type_ignores=[]
                 )
-                partitions.append(ExecutableTree(partition, len(imports_and_functions), self.names['global_vars']))
+                partitions.append(ExecutableTree(partition, len(imports + functions), self.names['global_vars']))
 
                 global_variables.clear()
                 variables_dict = "{"
@@ -402,7 +406,7 @@ def print_tree(tree):
 
 
 if __name__ == '__main__':
-    file = "Testing.py"
+    file = "CaesarCipher.py"
     modified_file = "Modified_File.py"
     cluster_file = "Cluster_Partition.py"
     with open(file) as source:
@@ -411,9 +415,10 @@ if __name__ == '__main__':
     Modifier = ClusterModifier()
     Modifier.visit(ast_tree)
     cluster_partitions = Modifier.create_partitions()
-    print("Loops:", *Modifier.loops)
+    print("Loops |", *Modifier.loops)
+    print("Functions |", *Modifier.functions.values())
     print("Variables:", Modifier.variables)
-    print("Functions:", Modifier.functions)
+    print("Partition:", cluster_partitions)
 
     if cluster_partitions:
         server = Server()
