@@ -44,7 +44,7 @@ class ClusterMediator:
         response, op_code = self.recv_msg(self.conn_sock)
         return response
 
-    def partition_finished(self, is_last=False):
+    def template_finished(self, is_last=False):
         op_code = 3
         self.send_msg(self.conn_sock, op_code, is_last)
         return self.await_response()

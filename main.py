@@ -11,7 +11,7 @@ from threading import Thread
 import astpretty
 
 
-class ClusterModifier(ast.NodeVisitor):
+class ClusterVisitor(ast.NodeVisitor):
     class Loop:
         def __init__(self, node, start_line, end_line):
             self.node = node
@@ -40,7 +40,7 @@ class ClusterModifier(ast.NodeVisitor):
             self.is_used = False
 
         def __str__(self):
-            return f"Func_Name: {self.name}, Used: {self.is_used} |"
+            return f"Name: {self.name}, Used: {self.is_used} |"
 
         def set_used(self):
             self.is_used = True
@@ -49,7 +49,7 @@ class ClusterModifier(ast.NodeVisitor):
         self.module_node = None
         self.names = {"global_vars": "global_variables", "mediator_class": "ClusterMediator",
                       "mediator_object": "mediator", "helper_func": "send_to_cluster", "request_func": "new_request",
-                      "end_partition_func": "partition_finished", "client_file": "shared.txt"}
+                      "end_template_func": "template_finished", "client_file": "shared.txt"}
 
         self.helper_func_node = None
         self.current_func = self.Function(None, None, 0, 0)
@@ -61,12 +61,12 @@ class ClusterModifier(ast.NodeVisitor):
         self.variables = set()  # {"variable name"}
         self.builtin_funcs = set()  # {"function name"}
 
-    def function_name(func):
-        def wrapper(*args, **kwargs):
-            print("Running:", func.__name__)
-            func(*args, **kwargs)
-
-        return wrapper
+    # def function_name(func):
+    #     def wrapper(*args, **kwargs):
+    #         print("Running:", func.__name__)
+    #         func(*args, **kwargs)
+    #
+    #     return wrapper
 
     def visit_Module(self, node):
         self.module_node = node
@@ -80,6 +80,7 @@ class ClusterModifier(ast.NodeVisitor):
             count += 1
         self.helper_func_node = string_to_ast_node(
             f"""def {self.names['helper_func']}({self.names['global_vars']}):
+        global {self.names['mediator_object']}
         {self.names['mediator_object']}.{self.names['request_func']}({self.names['global_vars']})""")
 
         node.body.insert(count, self.helper_func_node)
@@ -154,80 +155,183 @@ class ClusterModifier(ast.NodeVisitor):
                 function.set_used()
                 self.find_nested_functions(function.node)
 
-    def create_partitions(self):
-        partitions = []
-        global_variables = set()  # All variables that need to be sent to the cluster client
-        variables_dict = "{"  # Maps global vars to their values
-        variables_assign = []
-        for loop in self.loops:
+    def find_scope_variables(self, node, global_nodes, parameters):
+
+        global_nodes_copy = []
+        # Iterate over the children of the node
+
+        for child in ast.walk(node):
+            if isinstance(child, ast.Name) and child.id in self.variables and not \
+                    (child.id in self.functions.keys() or child.id in self.builtin_funcs):
+                parameters.add(child.id)
+
+            if isinstance(child, ast.Global):
+                global_nodes_copy.append(child)
+                global_nodes.append(deepcopy(child))
+
+        for child in global_nodes_copy:
+            child.parent.body.remove(child)
+
+    # def create_partitions(self):
+    #     partitions = []
+    #     global_nodes = []
+    #     parameters = set()  # All variables that need to be sent to the cluster client
+    #     variables_dict = "{"  # Maps global vars to their values
+    #     variables_assign = []
+    #
+    #     for loop in self.loops:
+    #         if loop.is_nested:
+    #             # Find all variable names
+    #             loop_node = loop.node
+    #             self.find_scope_variables(loop_node, global_nodes, parameters)
+    #
+    #             print("Parameters", parameters)
+    #
+    #             # Append variables to dictionary
+    #             for var in parameters:
+    #                 variables_dict += f"'{var}': {var}, "
+    #
+    #                 assign_node = string_to_ast_node(f"{var} = {self.names['global_vars']}['{var}']")
+    #                 variables_assign.append(assign_node)
+    #
+    #             variables_dict = variables_dict[:-2] + "}"
+    #
+    #             assign_node = string_to_ast_node(
+    #                 f"""for key, val in {self.names['global_vars']}.items():
+    #             exec(key + '=val')""")
+    #             await_response_node = string_to_ast_node(
+    #                 f"{self.names['global_vars']} = {self.names['mediator_object']}."
+    #                 f"{self.names['end_template_func']}()")
+    #
+    #             # Replace the for
+    #             if loop.is_within_func:
+    #                 func_node = loop.function.node
+    #                 index = get_node_index(func_node, loop_node)
+    #                 body = global_nodes + func_node.body
+    #             else:
+    #                 index = get_node_index(self.module_node, loop_node)
+    #                 body = self.module_node.body
+    #             body.insert(index + 1, assign_node)
+    #             body.insert(index + 1, await_response_node)
+    #             func_call = string_to_ast_node(
+    #                 f"""{self.names['helper_func']}({variables_dict})""")
+    #
+    #             loop_copy = deepcopy(loop_node)
+    #             loop_node.body = [func_call]
+    #
+    #             with_node = [string_to_ast_node(
+    #                 f"""with open('{self.names['client_file']}', 'w') as file:
+    #             file.write(str({variables_dict}))""")]
+    #
+    #             imports = [j for i in self.imports.values() for j in i]
+    #             functions = [function.node for function in self.functions.values() if function.is_used]
+    #
+    #             # Create the new tree
+    #             partition = ast.Module(
+    #                 body=imports + functions + variables_assign + loop_copy.body + with_node,
+    #                 type_ignores=[]
+    #             )
+    #             partitions.append(ExecutableTree(partition, len(imports + functions), self.names['global_vars']))
+    #
+    #             parameters.clear()
+    #             variables_dict = "{"
+    #             variables_assign = []
+    #     return partitions
+
+
+class ClusterModifier(ast.NodeTransformer):
+    def __init__(self, visitor):
+        self.visitor = visitor
+        self.templates = []
+        self.global_nodes = []
+        self.variables_assign = []
+        self.parameter_dict = None
+        self.parameters = set()
+
+    def visit_Name(self, node):
+        if node.id in self.visitor.variables and not\
+                (node.id in self.visitor.functions.keys() or node.id in self.visitor.builtin_funcs):
+            self.parameters.add(node.id)
+        self.generic_visit(node)
+        return node
+
+    def visit_Global(self, node):
+        self.generic_visit(node)
+        return None
+
+    def create_parameter_dict(self):
+        self.parameter_dict = "{"
+        for parameter in self.parameters:
+            self.parameter_dict += f"'{parameter}': {parameter}, "
+            assign_node = string_to_ast_node(f"{parameter} = {self.visitor.names['global_vars']}['{parameter}']")
+            self.variables_assign.append(assign_node)
+
+        self.parameter_dict = self.parameter_dict[:-2] + "}"
+
+    def modify_loop(self, loop):
+        await_response = string_to_ast_node(
+            f"{self.visitor.names['global_vars']} = {self.visitor.names['mediator_object']}."
+            f"{self.visitor.names['end_template_func']}()")
+
+        update_parameters = string_to_ast_node(
+            f"""for key, val in {self.visitor.names['global_vars']}.items():
+        exec(key + '=val')""")
+
+        if loop.is_within_func:
+            func_node = loop.function.node
+            index = get_node_index(func_node, loop.node)
+            body = self.global_nodes + func_node.body
+        else:
+            index = get_node_index(self.visitor.module_node, loop.node)
+            body = self.visitor.module_node.body
+        body.insert(index + 1, update_parameters)
+        body.insert(index + 1, await_response)
+        helper_func = string_to_ast_node(
+            f"""{self.visitor.names['helper_func']}({self.parameter_dict})""")
+
+        loop_copy = deepcopy(loop.node)
+        loop.node.body = [helper_func]
+
+        return loop_copy
+
+    def create_template(self, loop_copy):
+        open_file_node = [string_to_ast_node(
+            f"""with open('{self.visitor.names['client_file']}', 'w') as file:
+        file.write(str({self.parameter_dict}))""")]
+
+        imports = [j for i in self.visitor.imports.values() for j in i]
+        functions = [function.node for function in self.visitor.functions.values() if function.is_used]
+
+        template = ast.Module(
+            body=imports + functions + self.variables_assign + loop_copy.body + open_file_node,
+            type_ignores=[]
+        )
+
+        self.templates.append(ExecutableTree(template, len(imports + functions), self.visitor.names['global_vars']))
+
+    def provide_response(self):
+        for loop in self.visitor.loops:
             if loop.is_nested:
-                # Find all variable names
-                loop_node = loop.node
-                for name in ast.walk(loop_node):
-                    if isinstance(name, ast.Name) and name.id in self.variables and not \
-                            (name.id in self.functions.keys() or name.id in self.builtin_funcs):
-                        global_variables.add(name.id)
-                # Append variables to dictionary
-                for var in global_variables:
-                    variables_dict += f"'{var}': {var}, "
+                self.generic_visit(loop.node)
+                self.create_parameter_dict()
+                loop_copy = self.modify_loop(loop)
+                self.create_template(loop_copy)
 
-                    assign_node = string_to_ast_node(f"{var} = {self.names['global_vars']}['{var}']")
-                    variables_assign.append(assign_node)
-
-                variables_dict = variables_dict[:-2] + "}"
-
-                assign_node = string_to_ast_node(
-                    f"""for key, val in {self.names['global_vars']}.items():
-                exec(key + '=val')""")
-                await_response_node = string_to_ast_node(
-                    f"{self.names['global_vars']} = {self.names['mediator_object']}."
-                    f"{self.names['end_partition_func']}()")
-
-                # Replace the for
-                if loop.is_within_func:
-                    func_node = loop.function.node
-                    index = get_node_index(func_node, loop_node)
-                    body = func_node.body
-                else:
-                    index = get_node_index(self.module_node, loop_node)
-                    body = self.module_node.body
-                body.insert(index + 1, assign_node)
-                body.insert(index + 1, await_response_node)
-                func_call = string_to_ast_node(
-                    f"""{self.names['helper_func']}({variables_dict})""")
-
-                loop_copy = deepcopy(loop_node)
-                loop_node.body = [func_call]
-
-                with_node = [string_to_ast_node(
-                    f"""with open('{self.names['client_file']}', 'w') as file:
-                file.write(str({variables_dict}))""")]
-
-                imports = [j for i in self.imports.values() for j in i]
-                functions = [function.node for function in self.functions.values() if function.is_used]
-
-                # Create the new tree
-                partition = ast.Module(
-                    body=imports + functions + variables_assign + loop_copy.body + with_node,
-                    type_ignores=[]
-                )
-                partitions.append(ExecutableTree(partition, len(imports + functions), self.names['global_vars']))
-
-                global_variables.clear()
-                variables_dict = "{"
-                variables_assign = []
-        return partitions
+                self.parameters.clear()
+                self.global_nodes = []
+                self.variables_assign = []
+                self.parameter_dict = None
 
 
 class Server:
     # number  |  operation code
     #  0      |  reserved
-    #  1      |  cluster request
-    #  2      |  cluster response
-    #  3      |  end partition
-    #  4      |  notify readiness
-    #  5      |  exec tree request
-    #  6      |  exec tree response
+    #  1      |  run file request
+    #  2      |  run file response
+    #  3      |  change partition
+    #  4      |  node is ready
+    #  5      |  cluster request
+    #  6      |  cluster response
 
     def __init__(self, port=55555, send_format="utf-8", buffer_size=1024, max_queue=5):
         self.ip = socket.gethostbyname(socket.gethostname())
@@ -406,18 +510,21 @@ def print_tree(tree):
 
 
 if __name__ == '__main__':
-    file = "CaesarCipher.py"
+    file = "Testing.py"
     modified_file = "Modified_File.py"
     cluster_file = "Cluster_Partition.py"
     with open(file) as source:
         ast_tree = ast.parse(source.read())
 
-    Modifier = ClusterModifier()
-    Modifier.visit(ast_tree)
-    cluster_partitions = Modifier.create_partitions()
-    print("Loops |", *Modifier.loops)
-    print("Functions |", *Modifier.functions.values())
-    print("Variables:", Modifier.variables)
+    Visitor = ClusterVisitor()
+    Visitor.visit(ast_tree)
+    Modifier = ClusterModifier(Visitor)
+    Modifier.provide_response()
+    cluster_partitions = Modifier.templates
+    # cluster_partitions = Modifier.create_partitions()
+    print("Loops |", *Visitor.loops)
+    print("Functions |", *Visitor.functions.values())
+    print("Variables:", Visitor.variables)
     print("Partition:", cluster_partitions)
 
     if cluster_partitions:

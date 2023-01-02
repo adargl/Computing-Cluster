@@ -37,6 +37,7 @@ def container(msg, encrypted):
             global k
             k = key
 
+
 msg = "Secret message"
 k = 21
 encrypted = encrypt(msg, k)

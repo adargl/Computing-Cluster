@@ -80,5 +80,5 @@ def print_tree(tree):
 
 
 if __name__ == '__main__':
-    client = Client("192.168.68.117")
+    client = Client("127.0.0.1")
     client.init_connection()
