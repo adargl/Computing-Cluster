@@ -9,6 +9,7 @@ from struct import pack, unpack
 from threading import Thread
 
 import astpretty
+import logging
 
 
 class ClusterVisitor(ast.NodeVisitor):
@@ -63,7 +64,7 @@ class ClusterVisitor(ast.NodeVisitor):
 
     # def function_name(func):
     #     def wrapper(*args, **kwargs):
-    #         print("Running:", func.__name__)
+    #         logging.debug("Running:", func.__name__)
     #         func(*args, **kwargs)
     #
     #     return wrapper
@@ -143,7 +144,7 @@ class ClusterVisitor(ast.NodeVisitor):
                 else:
                     self.builtin_funcs.add(node.func.id)
             else:
-                print("Visiting:", func_name)
+                logging.debug("Visiting:", func_name)
                 self.visit_FunctionDef(function.node, False)
         self.generic_visit(node)
 
@@ -155,22 +156,22 @@ class ClusterVisitor(ast.NodeVisitor):
                 function.set_used()
                 self.find_nested_functions(function.node)
 
-    def find_scope_variables(self, node, global_nodes, parameters):
-
-        global_nodes_copy = []
-        # Iterate over the children of the node
-
-        for child in ast.walk(node):
-            if isinstance(child, ast.Name) and child.id in self.variables and not \
-                    (child.id in self.functions.keys() or child.id in self.builtin_funcs):
-                parameters.add(child.id)
-
-            if isinstance(child, ast.Global):
-                global_nodes_copy.append(child)
-                global_nodes.append(deepcopy(child))
-
-        for child in global_nodes_copy:
-            child.parent.body.remove(child)
+    # def find_scope_variables(self, node, global_nodes, parameters):
+    #
+    #     global_nodes_copy = []
+    #     # Iterate over the children of the node
+    #
+    #     for child in ast.walk(node):
+    #         if isinstance(child, ast.Name) and child.id in self.variables and not \
+    #                 (child.id in self.functions.keys() or child.id in self.builtin_funcs):
+    #             parameters.add(child.id)
+    #
+    #         if isinstance(child, ast.Global):
+    #             global_nodes_copy.append(child)
+    #             global_nodes.append(deepcopy(child))
+    #
+    #     for child in global_nodes_copy:
+    #         child.parent.body.remove(child)
 
     # def create_partitions(self):
     #     partitions = []
@@ -256,6 +257,7 @@ class ClusterModifier(ast.NodeTransformer):
         return node
 
     def visit_Global(self, node):
+        self.global_nodes.append(node)
         self.generic_visit(node)
         return None
 
@@ -280,7 +282,8 @@ class ClusterModifier(ast.NodeTransformer):
         if loop.is_within_func:
             func_node = loop.function.node
             index = get_node_index(func_node, loop.node)
-            body = self.global_nodes + func_node.body
+            body = func_node.body
+            body.insert(0, self.global_nodes)
         else:
             index = get_node_index(self.visitor.module_node, loop.node)
             body = self.visitor.module_node.body
@@ -328,7 +331,7 @@ class Server:
     #  0      |  reserved
     #  1      |  run file request
     #  2      |  run file response
-    #  3      |  change partition
+    #  3      |  change template
     #  4      |  node is ready
     #  5      |  cluster request
     #  6      |  cluster response
@@ -376,27 +379,31 @@ class Server:
                     # if self.ip == ip:
                     #     request_handler = Thread(target=self.send_tree)
                     #     request_handler.start()
-                    print(f"[CONNECTION ESTABLISHED] connection has been established from {client_addr}...")
-                    print(f"[ACTIVE CONNECTIONS] {len(self.read_socks)} active connections...")
+                    logging.info(f"[CONNECTION ESTABLISHED] connection has been established from {client_addr}...")
+                    logging.info(f"[ACTIVE CONNECTIONS] {len(self.read_socks)} active connections...")
                     self.read_socks.append(connection)
                 else:
                     packet = self.recv_msg(sock)
+                    msg_type = None
                     if packet:
                         if sock not in self.write_socks:
                             self.write_socks.append(sock)
                         data, op_code = packet
                         if op_code == 1:
                             self.request_queue.put(data)
+                            msg_type = "Processing Request"
                         elif op_code == 3:
                             Thread(target=self.outgoing_response, args=(sock,)).start()
+                            msg_type = "Change Template Request"
                         elif op_code == 4:
                             self.clients_queue.put(sock)
+                            msg_type = "Node Is Available For Processing. Executed Requests Count"
                         elif op_code == 6:
                             org = self.sock_to_tree[sock]
                             new = {k: data[k] for k in org if k in data and not org[k] == data[k]}
                             if new:
                                 self.responses[self.partition_index].update(new)
-                        print(f"[DATA RECEIVED] client: {data}")
+                        logging.info(f"[DATA RECEIVED] {msg_type}: {data}")
                     else:
                         self.close_sock(sock)
 
@@ -451,7 +458,7 @@ class Server:
         op_code = 2
         response = self.responses[self.partition_index]
         self.send_msg(sock, op_code, response)
-        print(f"[RESPONSE SENT] data: {response}")
+        logging.info(f"[RESPONSE SENT] Variables: {response}")
 
         if len(self.cluster_partitions) - 1 == self.partition_index:
             self.request_queue.put(None)
@@ -463,7 +470,7 @@ class Server:
             self.write_socks.remove(sock)
         self.read_socks.remove(sock)
         sock.close()
-        print(f"[CONNECTION CLOSED] {sock} has been closed...")
+        logging.info(f"[CONNECTION CLOSED] {sock} has been closed...")
 
 
 class ExecutableTree:
@@ -493,7 +500,7 @@ def string_to_ast_node(string):
     module = ast.parse(string)
     if len(module.body) == 1:
         return module.body[0]
-    print("String acceded the allowed amount of ast nodes")
+    logging.error("String acceded the allowed amount of ast nodes")
     return None
 
 
@@ -510,7 +517,9 @@ def print_tree(tree):
 
 
 if __name__ == '__main__':
-    file = "Testing.py"
+    logging.basicConfig(format='%(levelname)s:%(message)s', level=logging.INFO)
+
+    file = "CaesarCipher.py"
     modified_file = "Modified_File.py"
     cluster_file = "Cluster_Partition.py"
     with open(file) as source:
@@ -522,10 +531,10 @@ if __name__ == '__main__':
     Modifier.provide_response()
     cluster_partitions = Modifier.templates
     # cluster_partitions = Modifier.create_partitions()
-    print("Loops |", *Visitor.loops)
-    print("Functions |", *Visitor.functions.values())
-    print("Variables:", Visitor.variables)
-    print("Partition:", cluster_partitions)
+    logging.debug("Loops |", *Visitor.loops)
+    logging.debug("Functions |", *Visitor.functions.values())
+    logging.debug("Variables:", Visitor.variables)
+    logging.debug("Partition:", cluster_partitions)
 
     if cluster_partitions:
         server = Server()
@@ -539,6 +548,6 @@ if __name__ == '__main__':
         with open(modified_file, 'w') as output_file:
             output_file.write(modified_code)
         exec_tree(ast.parse(modified_code))
-        # print(f"\n--- File {file} is breakable ---")
+        # logging.warning(f"\n--- File {file} is breakable ---")
     else:
-        print(f"\n--- File {file} is unbreakable ---")
+        logging.warning(f"\n--- File {file} is unbreakable ---")

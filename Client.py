@@ -4,6 +4,7 @@ import socket
 from struct import pack, unpack
 
 import astpretty
+import logging
 
 
 class Client:
@@ -33,7 +34,7 @@ class Client:
                     self.send_response()
                     self.executed_count += 1
                     self.declare_ready()
-                print(f"[DATA RECEIVED] server: {tree}")
+                logging.info(f"[DATA RECEIVED] server: {tree}")
             else:
                 self.conn_sock.close()
                 break
@@ -80,5 +81,7 @@ def print_tree(tree):
 
 
 if __name__ == '__main__':
-    client = Client("127.0.0.1")
+    logging.basicConfig(format='%(levelname)s:%(message)s', level=logging.INFO)
+
+    client = Client("192.168.68.110")
     client.init_connection()
