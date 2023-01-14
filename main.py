@@ -144,7 +144,7 @@ class ClusterVisitor(ast.NodeVisitor):
                 else:
                     self.builtin_funcs.add(node.func.id)
             else:
-                logging.debug("Visiting:", func_name)
+                logging.debug(f"Visiting: {func_name}")
                 self.visit_FunctionDef(function.node, False)
         self.generic_visit(node)
 
@@ -270,7 +270,7 @@ class ClusterModifier(ast.NodeTransformer):
 
         self.parameter_dict = self.parameter_dict[:-2] + "}"
 
-    def modify_loop(self, loop):
+    def modify_input_file(self, loop):
         await_response = string_to_ast_node(
             f"{self.visitor.names['global_vars']} = {self.visitor.names['mediator_object']}."
             f"{self.visitor.names['end_template_func']}()")
@@ -281,9 +281,9 @@ class ClusterModifier(ast.NodeTransformer):
 
         if loop.is_within_func:
             func_node = loop.function.node
-            index = get_node_index(func_node, loop.node)
             body = func_node.body
             body.insert(0, self.global_nodes)
+            index = get_node_index(func_node, loop.node)
         else:
             index = get_node_index(self.visitor.module_node, loop.node)
             body = self.visitor.module_node.body
@@ -317,7 +317,7 @@ class ClusterModifier(ast.NodeTransformer):
             if loop.is_nested:
                 self.generic_visit(loop.node)
                 self.create_parameter_dict()
-                loop_copy = self.modify_loop(loop)
+                loop_copy = self.modify_input_file(loop)
                 self.create_template(loop_copy)
 
                 self.parameters.clear()
@@ -517,9 +517,9 @@ def print_tree(tree):
 
 
 if __name__ == '__main__':
-    logging.basicConfig(format='%(levelname)s:%(message)s', level=logging.INFO)
+    logging.basicConfig(format='%(asctime)s:%(message)s', datefmt='%I:%M:%S %p', level=logging.ERROR)
 
-    file = "CaesarCipher.py"
+    file = "Testing.py"
     modified_file = "Modified_File.py"
     cluster_file = "Cluster_Partition.py"
     with open(file) as source:
@@ -530,11 +530,11 @@ if __name__ == '__main__':
     Modifier = ClusterModifier(Visitor)
     Modifier.provide_response()
     cluster_partitions = Modifier.templates
-    # cluster_partitions = Modifier.create_partitions()
-    logging.debug("Loops |", *Visitor.loops)
-    logging.debug("Functions |", *Visitor.functions.values())
-    logging.debug("Variables:", Visitor.variables)
-    logging.debug("Partition:", cluster_partitions)
+
+    logging.debug(f"Loops | {str(*Visitor.loops)}")
+    logging.debug(f"Functions | {str(*Visitor.functions.values())}")
+    logging.debug(f"Variables: {Visitor.variables}")
+    logging.debug(f"Templates: {cluster_partitions}")
 
     if cluster_partitions:
         server = Server()
