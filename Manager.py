@@ -23,7 +23,7 @@ class ClusterVisitor(ast.NodeVisitor):
             self.is_nested = False
 
         def __str__(self):
-            return f"Within_func: {self.is_within_func}, Nested: {self.is_nested} |"
+            return f"Within_func: {self.is_within_func}, Nested: {self.is_nested}"
 
         def set_within_func(self, function):
             self.is_within_func = True
@@ -41,7 +41,7 @@ class ClusterVisitor(ast.NodeVisitor):
             self.is_used = False
 
         def __str__(self):
-            return f"Name: {self.name}, Used: {self.is_used} |"
+            return f"Name: {self.name}, Used: {self.is_used}"
 
         def set_used(self):
             self.is_used = True
@@ -62,30 +62,25 @@ class ClusterVisitor(ast.NodeVisitor):
         self.variables = set()  # {"variable name"}
         self.builtin_funcs = set()  # {"function name"}
 
-    # def function_name(func):
-    #     def wrapper(*args, **kwargs):
-    #         logging.debug("Running:", func.__name__)
-    #         func(*args, **kwargs)
-    #
-    #     return wrapper
-
     def visit_Module(self, node):
         self.module_node = node
         count = 0
-        # inject import
+        # Import the mediator class
         new_import_node = string_to_ast_node(
             f"from {self.names['mediator_class']} import {self.names['mediator_class']}")
         node.body.insert(count, new_import_node)
 
-        while isinstance(node.body[count], (ast.Import, ast.ImportFrom)):
-            count += 1
-        self.helper_func_node = string_to_ast_node(
-            f"""def {self.names['helper_func']}({self.names['global_vars']}):
-        global {self.names['mediator_object']}
-        {self.names['mediator_object']}.{self.names['request_func']}({self.names['global_vars']})""")
+        # # Create and inject the helper function
+        # while isinstance(node.body[count], (ast.Import, ast.ImportFrom)):
+        #     count += 1
+        # self.helper_func_node = string_to_ast_node(
+        #     f"""def {self.names['helper_func']}({self.names['global_vars']}):
+        # global {self.names['mediator_object']}
+        # {self.names['mediator_object']}.{self.names['request_func']}({self.names['global_vars']})""")
+        # node.body.insert(count, self.helper_func_node)
 
-        node.body.insert(count, self.helper_func_node)
-        while isinstance(node.body[count], ast.FunctionDef):
+        # Create and inject the mediator object
+        while isinstance(node.body[count], (ast.FunctionDef, ast.Import, ast.ImportFrom)):
             count += 1
         new_obj_node = string_to_ast_node(f"{self.names['mediator_object']} = {self.names['mediator_class']}()")
         node.body.insert(count, new_obj_node)
@@ -99,11 +94,14 @@ class ClusterVisitor(ast.NodeVisitor):
         self.imports["from"].append(node)
 
     def visit_FunctionDef(self, node, initial=True):
-        # Update the current function with every new definition
+        # If the function is called from within the code (initial=False), perform recursive visiting
+        # Otherwise if its called on a function definition (initial=True) save it's information
+
+        # Update the current function variable with every visit
         if initial:
             function = self.Function(node, node.name, node.lineno, node.end_lineno)
             self.current_func = function
-            # Add to tree functions
+            # Save the function node and name
             self.functions[node.name] = function
         else:
             self.current_func = self.functions[node.name]
@@ -136,6 +134,7 @@ class ClusterVisitor(ast.NodeVisitor):
             func_name = node.func.id
             function = self.functions[func_name]
             function.set_used()
+
             if self.current_loop.start_line < node.lineno <= self.current_loop.end_line:
                 if node.func.id in self.functions.keys():
                     loop = self.loops[-1]
@@ -145,7 +144,7 @@ class ClusterVisitor(ast.NodeVisitor):
                     self.builtin_funcs.add(node.func.id)
             else:
                 logging.debug(f"Visiting: {func_name}")
-                self.visit_FunctionDef(function.node, False)
+                self.visit_FunctionDef(function.node, initial=False)
         self.generic_visit(node)
 
     def find_nested_functions(self, node):
@@ -279,21 +278,25 @@ class ClusterModifier(ast.NodeTransformer):
             f"""for key, val in {self.visitor.names['global_vars']}.items():
         exec(key + '=val')""")
 
+        global_mediator = string_to_ast_node(f"global {self.visitor.names['mediator_object']}")
+        send_to_cluster = string_to_ast_node(
+            f"{self.visitor.names['mediator_object']}.{self.visitor.names['request_func']}"
+            f"({self.parameter_dict})")
+
         if loop.is_within_func:
             func_node = loop.function.node
             body = func_node.body
             body.insert(0, self.global_nodes)
+            body.insert(0, global_mediator)
             index = get_node_index(func_node, loop.node)
         else:
             index = get_node_index(self.visitor.module_node, loop.node)
             body = self.visitor.module_node.body
         body.insert(index + 1, update_parameters)
         body.insert(index + 1, await_response)
-        helper_func = string_to_ast_node(
-            f"""{self.visitor.names['helper_func']}({self.parameter_dict})""")
 
         loop_copy = deepcopy(loop.node)
-        loop.node.body = [helper_func]
+        loop.node.body = [send_to_cluster]
 
         return loop_copy
 
@@ -489,7 +492,7 @@ class ExecutableTree:
         vars_node = string_to_ast_node(new_assign_node)
         tree.body.insert(self.index, vars_node)
 
-        tmp_file = "Cluster_Partition.py"
+        tmp_file = "Cluster_Template.py"
         with open(tmp_file, 'w') as f:
             f.write(ast.unparse(tree))
 
@@ -517,11 +520,11 @@ def print_tree(tree):
 
 
 if __name__ == '__main__':
-    logging.basicConfig(format='%(asctime)s:%(message)s', datefmt='%I:%M:%S %p', level=logging.ERROR)
+    logging.basicConfig(format='%(asctime)s:%(message)s', datefmt='%I:%M:%S %p', level=logging.DEBUG)
 
     file = "Testing.py"
     modified_file = "Modified_File.py"
-    cluster_file = "Cluster_Partition.py"
+    template_file = "Cluster_Template.py"
     with open(file) as source:
         ast_tree = ast.parse(source.read())
 
@@ -531,8 +534,8 @@ if __name__ == '__main__':
     Modifier.provide_response()
     cluster_partitions = Modifier.templates
 
-    logging.debug(f"Loops | {str(*Visitor.loops)}")
-    logging.debug(f"Functions | {str(*Visitor.functions.values())}")
+    logging.debug(f"Loops {[str(loop) for loop in Visitor.loops]}")
+    logging.debug(f"Functions {[str(value) for value in Visitor.functions.values()]}")
     logging.debug(f"Variables: {Visitor.variables}")
     logging.debug(f"Templates: {cluster_partitions}")
 
