@@ -12,7 +12,7 @@ def merge_sort(array):
         # Iterate over pairs of adjacent subarrays
         for i in range(0, len(subarrays), 2):
             # Merge the subarrays
-            merged.append(merge(subarrays[i], subarrays[i+1]))
+            merged.append(merge(subarrays[i], subarrays[i + 1]))
         # Replace the list of subarrays with the list of merged subarrays
         subarrays = merged
 

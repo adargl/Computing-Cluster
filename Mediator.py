@@ -3,7 +3,7 @@ import socket
 from struct import pack, unpack
 
 
-class ClusterMediator:
+class Mediator:
     def __init__(self, server_port=55555, send_format="utf-8", buffer_size=1024):
         self.server_ip = socket.gethostbyname(socket.gethostname())
         self.server_port = server_port
@@ -36,15 +36,15 @@ class ClusterMediator:
             data.extend(packet)
         return data
 
-    def new_request(self, global_variables):
+    def processing_request(self, params):
         op_code = 1
-        self.send_msg(self.conn_sock, op_code, global_variables)
+        self.send_msg(self.conn_sock, op_code, params)
 
     def await_response(self):
         response, op_code = self.recv_msg(self.conn_sock)
         return response
 
-    def template_finished(self):
+    def template_change(self):
         op_code = 3
         self.send_msg(self.conn_sock, op_code, True)
         return self.await_response()

@@ -32,9 +32,9 @@ def decrypt(message, key):
 
 
 def container(msg, encrypted):
+    global k
     for key in range(26):
         if decrypt(encrypted, key) == msg:
-            global k
             k = key
 
 

@@ -68,8 +68,8 @@ class Client:
     def send_response(self):
         op_code = 6
         with open(self.file) as file:
-            global_vars = ast.literal_eval(file.read())
-        self.send_msg(self.conn_sock, op_code, global_vars)
+            params = ast.literal_eval(file.read())
+        self.send_msg(self.conn_sock, op_code, params)
 
 
 def exec_tree(tree, file_name=''):
@@ -81,7 +81,7 @@ def print_tree(tree):
 
 
 if __name__ == '__main__':
-    logging.basicConfig(format='%(levelname)s:%(message)s', level=logging.INFO)
+    logging.basicConfig(format='%(asctime)s:%(message)s', datefmt='%I:%M:%S %p', level=logging.INFO)
 
-    client = Client("192.168.68.113")
+    client = Client("192.168.68.111")
     client.init_connection()
