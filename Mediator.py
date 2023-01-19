@@ -48,3 +48,16 @@ class Mediator:
         op_code = 3
         self.send_msg(self.conn_sock, op_code, True)
         return self.await_response()
+
+
+class Handler:
+    def __init__(self):
+        self.mediator = Mediator()
+        self.concurrent = 0
+
+    def set_connection_concurrent(self):
+        self.concurrent = 1
+
+    def handle_connection(self):
+        if self.concurrent:
+            pass

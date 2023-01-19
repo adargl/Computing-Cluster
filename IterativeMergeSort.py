@@ -1,3 +1,5 @@
+from random import randint
+
 def merge_sort(array):
     # Make a copy of the array to avoid modifying the original
     array = array[:]
@@ -44,5 +46,5 @@ def merge(left, right):
 
 
 # Test the merge_sort function
-array = [3, 7, 1, 5, 2, 8, 4, 6]
-print(merge_sort(array))  # Output: [1, 2, 3, 4, 5, 6, 7, 8]
+array = list(map(lambda x: randint(1, 100), range(100)))
+print(merge_sort(array))

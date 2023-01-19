@@ -217,7 +217,7 @@ class ClusterModifier(ast.NodeTransformer):
         #     f"  exec(key + '=val')")
         # update_params = string_to_ast_node(
         #     f"for key, val in {self.visitor.names['parameters']}.items():\n"
-        #     f"  locals()[key] = val")
+        #     f"  globals()[key] = val")
         update_params = string_to_ast_node(f"subarrays = params['subarrays']")
         change_template = string_to_ast_node(
             f"{self.visitor.names['parameters']} = {self.visitor.names['mediator_object']}."
@@ -349,7 +349,6 @@ class Server:
                             msg_type = "Process result"
                             org = self.sock_to_tree[sock]
                             new = {k: data[k] for k in org if k in data and not org[k] == data[k]}
-                            print("org:", org, "new:", new)
                             if new:
                                 self.responses[self.insertion_index].update(new)
                             # While loop addition
@@ -465,7 +464,7 @@ def get_node_index(tree, node):
 
 
 def exec_tree(tree, file_name=''):
-    exec(compile(tree, file_name, 'exec'))
+    exec(compile(tree, file_name, 'exec'), globals())
 
 
 def print_tree(tree):
@@ -503,6 +502,7 @@ if __name__ == '__main__':
         modified_code = ast.unparse(ast_tree)
         with open(modified_file, 'w') as output_file:
             output_file.write(modified_code)
+        # print_tree(ast.parse(modified_code))
         exec_tree(ast.parse(modified_code))
         # logging.warning(f"\n--- File {file} is breakable ---")
     else:
