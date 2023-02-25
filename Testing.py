@@ -31,6 +31,26 @@ def string_to_ast_node(string: str):
     return None
 
 
+def my_function(*flags):
+    allowed_flags = ["is_condition1", "is_condition2"]
+    is_condition1 = False
+    is_condition2 = False
+    variables = locals()
+
+    # Extract the arguments that were supplied
+    for flag in flags:
+        if flag not in allowed_flags:
+            raise ValueError(f"Invalid flag type. Expected one of: {allowed_flags}")
+        else:
+            variables[flag] = True
+
+    print(is_condition1)
+    print(is_condition2)
+
+
+if __name__ == '__main__':
+    my_function("is_condition1", "is_condition2")
+
 # def modify_loop(self, loop):
 #         loop.make_node_copy()
 #
@@ -74,29 +94,4 @@ def string_to_ast_node(string: str):
 #                 body.insert(index, self.change_template_node)
 #
 #         for arg_name in thread.args:
-#             self.parameters.add(arg_name)
-
-
-if __name__ == '__main__':
-    for_node = string_to_ast_node("for _ in range(1):\n"
-                                  "    print('Definite Test!')\n"
-                                  "    print('Adar is the Best!')")
-    print_node1 = for_node.body[0]
-    print_node2 = for_node.body[1]
-    Visitor().visit(for_node)
-    Visitor().generic_visit(node=for_node, modify=True, is_container=True, modified_node=print_node1,
-                            replacement_node=print_node2)
-    module = ast.Module(
-        body=[for_node],
-        type_ignores=[]
-    )
-    program = """
-a = 10
-a += 7
-print(a)
-            """
-    tree = ast.parse(program)
-    Visitor().visit(tree)
-
-    exec(compile(module, '', 'exec'))
-    exec(compile(tree, '', 'exec'))
+#             self.parameters.add(arg_name)2345

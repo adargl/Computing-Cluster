@@ -73,7 +73,7 @@ class Client:
 
 
 def exec_tree(tree, file_name=''):
-    exec(compile(tree, file_name, 'exec'))
+    exec(compile(tree, file_name, 'exec'), globals())
 
 
 def print_tree(tree):
@@ -83,5 +83,5 @@ def print_tree(tree):
 if __name__ == '__main__':
     logging.basicConfig(format='%(asctime)s:%(message)s', datefmt='%I:%M:%S %p', level=logging.INFO)
 
-    client = Client("192.168.68.105")
+    client = Client("192.168.68.112")
     client.init_connection()
