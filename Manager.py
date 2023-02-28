@@ -4,14 +4,42 @@ import queue
 import select
 import socket
 import time
-import numpy as np
+import threading
 from copy import deepcopy
 from struct import pack, unpack
-from threading import Thread
 from enum import Enum
 
 import astpretty
 import logging
+
+
+class CustomFormatter(logging.Formatter):
+    """Logging colored formatter, adapted from:
+     https://alexandra-zaharia.github.io/posts/make-your-own-custom-color-formatter-with-python-logging/"""
+
+    dark_grey = "\x1b[38;5;245m"
+    bright_grey = "\x1b[38;5;250m"
+    yellow = '\x1b[38;5;136m'
+    red = '\x1b[31;20m'
+    bold_red = '\x1b[31;1m'
+    reset = '\x1b[0m'
+
+    def __init__(self):
+        super().__init__()
+        self.level_fmt = '%(asctime)s %(message)s'
+        self.time_fmt = '%I:%M:%S'
+        self.FORMATS = {
+            logging.DEBUG: self.dark_grey + self.level_fmt + self.reset,
+            logging.INFO: self.bright_grey + self.level_fmt + self.reset,
+            logging.WARNING: self.yellow + self.level_fmt + self.reset,
+            logging.ERROR: self.red + self.level_fmt + self.reset,
+            logging.CRITICAL: self.bold_red + self.level_fmt + self.reset
+        }
+
+    def format(self, record):
+        log_fmt = self.FORMATS.get(record.levelno)
+        formatter = logging.Formatter(log_fmt, self.time_fmt)
+        return formatter.format(record)
 
 
 class ClusterVisitor(ast.NodeVisitor):
@@ -107,8 +135,8 @@ class ClusterVisitor(ast.NodeVisitor):
         client_file: a file name in which the client stores data temporarily
         """
         self.names = {"parameters": "params", "mediator_class": "Mediator",
-                      "mediator_object": "mediator", "processing_request": "processing_request",
-                      "template_change": "template_change", "await": "await_response",
+                      "mediator_object": "cluster", "processing_request": "send_request",
+                      "template_change": "template_change", "await": "get_results",
                       "client_file": "shared.txt"}
         self.module_node = None
 
@@ -268,9 +296,10 @@ class ClusterModifier(ast.NodeTransformer):
         self.imports = [f for i in visitor.imports.values() for f in i]
         self.modified_functions = [function.node for function in visitor.functions.values() if function.is_used]
         self.original_functions = [deepcopy(function) for function in self.modified_functions]
-        self.templates = []
-        self.global_nodes = []
-        self.instructions = []
+        self.templates_count = 0
+        self.templates = dict()
+        self.global_nodes = list()
+        self.instructions = list()
         self.parameters = set()
         self.max_concurrent_loops = 4
 
@@ -284,8 +313,6 @@ class ClusterModifier(ast.NodeTransformer):
 
         self.setup_tree()
 
-        deepcopy(ast_tree)
-
     @property
     def param_dict(self):
         param_dict = "{"
@@ -296,15 +323,17 @@ class ClusterModifier(ast.NodeTransformer):
         return param_dict
 
     @property
-    def await_response_node(self):
+    def send_request_node(self):
         return str_to_ast_node(
-            f"{self.names['parameters']} = {self.names['mediator_object']}.{self.names['await']}()"
+            f"{self.names['mediator_object']}.{self.names['processing_request']}"
+            f"({self.templates_count}, {self.param_dict})"
         )
 
     @property
-    def execute_on_cluster_node(self):
+    def get_results_node(self):
         return str_to_ast_node(
-            f"{self.names['mediator_object']}.{self.names['processing_request']}({self.param_dict})"
+            f"{self.names['parameters']} = {self.names['mediator_object']}.{self.names['await']}"
+            f"({self.templates_count})"
         )
 
     def from_params_to_instructions(self):
@@ -343,9 +372,9 @@ class ClusterModifier(ast.NodeTransformer):
 
         if loop.loop_type == self.visitor.Type.FOR:
             body.insert(insertion_index + 1, self.update_params_node)
-            loop.node.body = [self.execute_on_cluster_node]
+            loop.node.body = [self.send_request_node]
         elif loop.loop_type == self.visitor.Type.WHILE:
-            loop.node.body = [self.instructions, self.execute_on_cluster_node, self.await_response_node,
+            loop.node.body = [self.instructions, self.send_request_node, self.get_results_node,
                               self.update_params_node]
 
         return loop
@@ -361,8 +390,8 @@ class ClusterModifier(ast.NodeTransformer):
 
         # Perform all other changes
         if thread.start_call and thread.join_call:
-            execution_node = self.execute_on_cluster_node
-            await_node = self.await_response_node
+            execution_node = self.send_request_node
+            await_node = self.get_results_node
 
             # Replace the start() call
             self.generic_visit(thread.start_call.container, thread.start_call.node,
@@ -465,7 +494,7 @@ class ClusterModifier(ast.NodeTransformer):
         return None
 
     def create_template(self, loop=None):
-        open_file_node = [str_to_ast_node(
+        write_to_file = [str_to_ast_node(
             f"""with open('{self.names['client_file']}', 'w') as file:
                     file.write(str({self.param_dict}))"""
         )]
@@ -473,12 +502,14 @@ class ClusterModifier(ast.NodeTransformer):
             self.instructions += loop.node_copy.body
 
         template = ast.Module(
-            body=self.imports + self.original_functions + self.instructions + open_file_node,
+            body=self.imports + self.original_functions + self.instructions + write_to_file,
             type_ignores=[]
         )
-        self.templates.append(
-            ExecutableTree(template, len(self.imports + self.original_functions), self.names['parameters'])
+        self.templates[self.templates_count] = ExecutableTree(
+            template, len(self.imports + self.original_functions), self.names['parameters']
         )
+
+        self.templates_count += 1
 
     def provide_response(self):
         for loop in self.visitor.loops:
@@ -512,7 +543,7 @@ class ObjectType(Enum):
         return self.name.lower()
 
 
-class Server:
+class ClusterServer:
     # number  |  operation code
     #  0      |  reserved
     #  1      |  run file request
@@ -534,11 +565,11 @@ class Server:
         self.read_socks = list()
         self.write_socks = list()
         self.templates = list()
-        self.insertion_index = 0
         self.clients_queue = queue.Queue()
         self.task_queue = queue.Queue()
 
-        self.sock_to_tree = dict()
+        self.condition = threading.Condition()
+        self.sock_to_task = dict()
         self.responses = list()
         self.client_socks = list()
 
@@ -562,40 +593,42 @@ class Server:
             for sock in readable:
                 if sock is self.main_sock:
                     connection, client_addr = sock.accept()
-                    logging.info(f"[CONNECTION ESTABLISHED] connection has been established from {client_addr}...")
-                    logging.info(f"[ACTIVE CONNECTIONS] {len(self.read_socks)} active connections...")
+                    logger.info(f"[CONNECTION ESTABLISHED] connection has been established from {client_addr}...")
+                    logger.info(f"[ACTIVE CONNECTIONS] {len(self.read_socks)} active connection(s)...")
                     self.read_socks.append(connection)
                 else:
                     packet = self.recv_msg(sock)
-                    msg_type = None
+                    msg_fmt = None
                     if packet:
                         if sock not in self.write_socks:
                             self.write_socks.append(sock)
-                        data, op_code = packet
+                        op_code, reserved, data = packet
                         if op_code == 1:
+                            template_id = reserved
                             self.client_socks.append(sock)
-                            self.task_queue.put(data)
-                            msg_type = "Processing Request"
+                            self.task_queue.put((template_id, data))
+                            msg_fmt = f"processing request (id={template_id})"
                         elif op_code == 3:
-                            Thread(target=self.handle_results, args=(sock,)).start()
-                            msg_type = "Change Template Request"
+                            task_group_id = reserved
+                            thread = threading.Thread(target=self.handle_results, args=(sock, task_group_id))
+                            thread.start()
+                            logger.info(f"[DATA RECEIVED] get results request (id={task_group_id})")
                         elif op_code == 4:
                             self.clients_queue.put(sock)
-                            msg_type = "Available For Processing. Executed Templates"
+                            ip, port = sock.getsockname()
+                            logger.info(f"[TASK FINISHED] {ip} executed {data} task(s)")
+                            logger.info(f"[DATA RECEIVED] {ip} is currently available")
                         elif op_code == 6:
-                            msg_type = "Process result"
-                            org = self.sock_to_tree[sock]
-                            new = {k: data[k] for k in org if k in data and not org[k] == data[k]}
-                            if new:
-                                self.responses[self.insertion_index].update(new)
-                            # While loop addition
-                            op_code = 2
-                            self.send_msg(self.client_socks[0], op_code, new)
-                            logging.info(f"[DATA RECEIVED] {msg_type}: {data}")
-                            logging.info(f"[RESPONSE SENT] Parameters: {new}")
-                            msg_type = None
-                        if msg_type:
-                            logging.info(f"[DATA RECEIVED] {msg_type}: {data}")
+                            task_id = reserved
+                            msg_fmt = f"process result (id={task_id})"
+                            original = self.sock_to_task[sock]
+                            new = {p: data[p] for p in original if p in data and not original[p] == data[p]}
+                            with self.condition:
+                                if new:
+                                    self.responses[task_id].update(new)
+                                self.condition.notify()
+                        if msg_fmt:
+                            logger.info(f"[DATA RECEIVED] {msg_fmt}: {data}")
                     else:
                         self.close_sock(sock)
 
@@ -604,18 +637,18 @@ class Server:
         for sock in self.read_socks:
             self.close_sock(sock)
 
-    def send_msg(self, sock, op_code, msg):
+    def send_msg(self, sock, op_code, msg, reserved=0):
         pickled_msg = pickle.dumps(msg)
-        pickled_msg = pack('>II', len(pickled_msg), op_code) + pickled_msg
+        pickled_msg = pack('>III', len(pickled_msg), op_code, reserved) + pickled_msg
         sock.sendall(pickled_msg)
 
     def recv_msg(self, sock):
-        raw_header = self.recv_limited_bytes(sock, 8)
+        raw_header = self.recv_limited_bytes(sock, 12)
         if not raw_header:
             return None
-        msg_len, op_code = unpack('>II', raw_header)
+        msg_len, op_code, reserved = unpack('>III', raw_header)
         pickled_msg = self.recv_limited_bytes(sock, msg_len)
-        return pickle.loads(pickled_msg), op_code
+        return op_code, reserved, pickle.loads(pickled_msg)
 
     def recv_limited_bytes(self, sock, n):
         data = bytearray()
@@ -629,40 +662,38 @@ class Server:
     def handle_tasks(self):
         op_code = 5
         while True:
-            time.sleep(0.01)
+            with threading.Lock():
+                time.sleep(0.01)
             if not self.clients_queue.empty():
                 sock = self.clients_queue.get()
                 if sock in self.write_socks:
-                    params = self.task_queue.get()
-                    if not params:
+                    data = self.task_queue.get()
+                    if not data:
                         self.clients_queue.put(sock)
                         break
-                    partition = self.templates[self.insertion_index]
-                    partition.set_params(params)
-                    tree = partition.finalize()
-                    self.send_msg(sock, op_code, tree)
-                    self.sock_to_tree[sock] = params
+                    template_id, params = data
+                    task = self.templates[template_id]
+                    task.set_params(params)
+                    tree = task.finalize()
+                    self.send_msg(sock, op_code, tree, template_id)
+                    self.sock_to_task[sock] = params
         self.operation_finished = True
 
-    def handle_results(self, sock):
-        while not self.task_queue.empty():
-            time.sleep(0.01)
+    def handle_results(self, sock, task_group_id):
+        with self.condition:
+            while not self.task_queue.empty():
+                self.condition.wait()
         op_code = 2
-        response = self.responses[self.insertion_index]
+        response = self.responses[task_group_id]
         self.send_msg(sock, op_code, response)
-        logging.info(f"[RESPONSE SENT] Parameters: {response}")
-
-        if len(self.templates) - 1 == self.insertion_index:
-            self.task_queue.put(None)
-        else:
-            self.insertion_index += 1
+        logger.info(f"[RESPONSE SENT] parameters: {response}")
 
     def close_sock(self, sock):
         if sock in self.write_socks:
             self.write_socks.remove(sock)
         self.read_socks.remove(sock)
         sock.close()
-        logging.info(f"[CONNECTION CLOSED] {sock} has been closed...")
+        logger.info(f"[CONNECTION CLOSED] {sock} has been closed...")
 
 
 class ExecutableTree:
@@ -681,7 +712,7 @@ class ExecutableTree:
         param_node = str_to_ast_node(new_assign_node)
         tree.body.insert(self.index, param_node)
 
-        tmp_file = "Template_File.py"
+        tmp_file = "Created.py"
         with open(tmp_file, 'w') as f:
             f.write(ast.unparse(tree))
 
@@ -693,7 +724,7 @@ def str_to_ast_node(string: str):
     if len(module.body) == 1:
         node = module.body[0]
         return node
-    logging.error("String exceeded the allowed amount of ast nodes")
+    logger.error("String exceeded the allowed amount of ast nodes")
     return None
 
 
@@ -706,40 +737,46 @@ def print_tree(tree):
 
 
 if __name__ == '__main__':
-    logging.basicConfig(format='%(asctime)s:%(message)s', datefmt='%I:%M:%S %p', level=logging.DEBUG)
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.INFO)
+    handler = logging.StreamHandler()
+    handler.setLevel(logger.level)
+    handler.setFormatter(CustomFormatter())
+    logger.addHandler(handler)
 
-    file = "Examples/Matrix_ Multiplication.py"
-    modified_file = "Modified_File.py"
-    template_file = "Template_File.py"
+    file = "Examples/Matrix_Multiplication.py"
+    modified_file = "Modified.py"
+    template_file = "Created.py"
     with open(file) as source:
         ast_tree = ast.parse(source.read())
 
     Visitor = ClusterVisitor()
     Visitor.visit(ast_tree)
 
-    logging.debug(f"Loops {[str(loop) for loop in Visitor.loops]}")
-    logging.debug(f"Functions {[str(value) for value in Visitor.functions.values()]}")
-    logging.debug(f"Threads {[str(thread) for thread in Visitor.threads]}")
-    logging.debug(f"Parameters {Visitor.parameters}")
+    logger.debug(f"Loops {[str(loop) for loop in Visitor.loops]}")
+    logger.debug(f"Functions {[str(value) for value in Visitor.functions.values()]}")
+    logger.debug(f"Threads {[str(thread) for thread in Visitor.threads]}")
+    logger.debug(f"Parameters {Visitor.parameters}")
 
     Modifier = ClusterModifier(Visitor)
     Modifier.provide_response()
     cluster_partitions = Modifier.templates
 
-    logging.debug(f"Templates {cluster_partitions}")
+    logger.debug(f"Templates {cluster_partitions}")
 
     if cluster_partitions:
-        server = Server()
+        logger.warning(f"File {file} is breakable")
+
+        server = ClusterServer()
         server.set_partition(cluster_partitions)
-        request_handler = Thread(target=server.handle_tasks)
+        request_handler = threading.Thread(target=server.handle_tasks)
         request_handler.start()
-        server_thread = Thread(target=server.init_connection)
+        server_thread = threading.Thread(target=server.init_connection)
         server_thread.start()
 
         modified_code = ast.unparse(ast_tree)
         with open(modified_file, 'w') as output_file:
             output_file.write(modified_code)
         exec_tree(ast.parse(modified_code))
-        # logging.warning(f"\n--- File {file} is breakable ---")
     else:
-        logging.warning(f"\n--- File {file} is unbreakable ---")
+        logger.warning(f"File {file} is unbreakable")

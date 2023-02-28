@@ -1,7 +1,7 @@
 import pickle
 import socket
 from struct import pack, unpack
-
+import logging
 
 class Mediator:
     def __init__(self, server_port=55555, send_format="utf-8", buffer_size=1024):
@@ -14,18 +14,18 @@ class Mediator:
 
         self.conn_sock.connect(self.server_addr)
 
-    def send_msg(self, sock, op_code, msg):
+    def send_msg(self, sock, op_code, msg, reserved=0):
         pickled_msg = pickle.dumps(msg)
-        pickled_msg = pack('>II', len(pickled_msg), op_code) + pickled_msg
+        pickled_msg = pack('>III', len(pickled_msg), op_code, reserved) + pickled_msg
         sock.sendall(pickled_msg)
 
     def recv_msg(self, sock):
-        raw_header = self.recv_limited_bytes(sock, 8)
+        raw_header = self.recv_limited_bytes(sock, 12)
         if not raw_header:
             return None
-        msg_len, op_code = unpack('>II', raw_header)
+        msg_len, op_code, reserved = unpack('>III', raw_header)
         pickled_msg = self.recv_limited_bytes(sock, msg_len)
-        return pickle.loads(pickled_msg), op_code
+        return op_code, reserved, pickle.loads(pickled_msg)
 
     def recv_limited_bytes(self, sock, n):
         data = bytearray()
@@ -36,18 +36,15 @@ class Mediator:
             data.extend(packet)
         return data
 
-    def processing_request(self, params):
+    def send_request(self, template_id, params):
         op_code = 1
-        self.send_msg(self.conn_sock, op_code, params)
+        self.send_msg(self.conn_sock, op_code, params, template_id)
 
-    def await_response(self):
-        response, op_code = self.recv_msg(self.conn_sock)
-        return response
-
-    def template_change(self):
+    def get_results(self, task_id):
         op_code = 3
-        self.send_msg(self.conn_sock, op_code, True)
-        return self.await_response()
+        self.send_msg(self.conn_sock, op_code, task_id)
+        op_code, reserved, response = self.recv_msg(self.conn_sock)
+        return response
 
 
 class Handler:

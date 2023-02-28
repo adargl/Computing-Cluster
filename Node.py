@@ -28,10 +28,10 @@ class Client:
         while True:
             packet = self.recv_msg(self.conn_sock)
             if packet:
-                tree, op_code = packet
+                op_code, task_id, tree = packet
                 if op_code == 5:
                     exec_tree(tree)
-                    self.send_response()
+                    self.send_response(task_id)
                     self.executed_count += 1
                     self.declare_ready()
                 logging.info(f"[DATA RECEIVED] server: {tree}")
@@ -39,18 +39,18 @@ class Client:
                 self.conn_sock.close()
                 break
 
-    def send_msg(self, sock, op_code, msg):
+    def send_msg(self, sock, op_code, msg, reserved=0):
         pickled_msg = pickle.dumps(msg)
-        pickled_msg = pack('>II', len(pickled_msg), op_code) + pickled_msg
+        pickled_msg = pack('>III', len(pickled_msg), op_code, reserved) + pickled_msg
         sock.sendall(pickled_msg)
 
     def recv_msg(self, sock):
-        raw_header = self.recv_limited_bytes(sock, 8)
+        raw_header = self.recv_limited_bytes(sock, 12)
         if not raw_header:
             return None
-        msg_len, op_code = unpack('>II', raw_header)
+        msg_len, op_code, reserved = unpack('>III', raw_header)
         pickled_msg = self.recv_limited_bytes(sock, msg_len)
-        return pickle.loads(pickled_msg), op_code
+        return op_code, reserved, pickle.loads(pickled_msg)
 
     def recv_limited_bytes(self, sock, n):
         data = bytearray()
@@ -65,11 +65,11 @@ class Client:
         op_code = 4
         self.send_msg(self.conn_sock, op_code, self.executed_count)
 
-    def send_response(self):
+    def send_response(self, task_id):
         op_code = 6
         with open(self.file) as file:
             params = ast.literal_eval(file.read())
-        self.send_msg(self.conn_sock, op_code, params)
+        self.send_msg(self.conn_sock, op_code, params, task_id)
 
 
 def exec_tree(tree, file_name=''):
@@ -83,5 +83,5 @@ def print_tree(tree):
 if __name__ == '__main__':
     logging.basicConfig(format='%(asctime)s:%(message)s', datefmt='%I:%M:%S %p', level=logging.INFO)
 
-    client = Client("192.168.68.110")
+    client = Client("192.168.68.113")
     client.init_connection()
