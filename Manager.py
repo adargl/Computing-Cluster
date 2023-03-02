@@ -3,11 +3,12 @@ import pickle
 import queue
 import select
 import socket
-import time
 import threading
+from enum import Enum
 from copy import deepcopy
 from struct import pack, unpack
-from enum import Enum
+from io import StringIO
+from contextlib import redirect_stdout
 
 import astpretty
 import logging
@@ -21,19 +22,19 @@ class CustomFormatter(logging.Formatter):
     bright_grey = "\x1b[38;5;250m"
     yellow = '\x1b[38;5;136m'
     red = '\x1b[31;20m'
-    bold_red = '\x1b[31;1m'
+    green = '\x1b[38;5;64m'
     reset = '\x1b[0m'
 
-    def __init__(self):
+    def __init__(self, level_fmt, time_fmt):
         super().__init__()
-        self.level_fmt = '%(asctime)s %(message)s'
-        self.time_fmt = '%I:%M:%S'
+        self.level_fmt = level_fmt
+        self.time_fmt = time_fmt
         self.FORMATS = {
             logging.DEBUG: self.dark_grey + self.level_fmt + self.reset,
-            logging.INFO: self.bright_grey + self.level_fmt + self.reset,
+            logging.INFO: self.dark_grey + self.level_fmt + self.reset,
             logging.WARNING: self.yellow + self.level_fmt + self.reset,
             logging.ERROR: self.red + self.level_fmt + self.reset,
-            logging.CRITICAL: self.bold_red + self.level_fmt + self.reset
+            logging.CRITICAL: self.green + self.level_fmt + self.reset
         }
 
     def format(self, record):
@@ -546,12 +547,13 @@ class ObjectType(Enum):
 class ClusterServer:
     # number  |  operation code
     #  0      |  reserved
-    #  1      |  run file request
-    #  2      |  run file response
-    #  3      |  change template
-    #  4      |  node is ready
-    #  5      |  cluster request
-    #  6      |  cluster response
+    #  1      |  processing request
+    #  2      |  processing response
+    #  3      |  get results
+    #  4      |  node available
+    #  5      |  send to cluster
+    #  6      |  return response
+    #  7      |  initiate connection
 
     def __init__(self, port=55555, send_format="utf-8", buffer_size=1024, max_queue=5):
         self.ip = socket.gethostbyname(socket.gethostname())
@@ -562,71 +564,82 @@ class ClusterServer:
         self.max_queue = max_queue
         self.main_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
+        self.client_sock = None
         self.read_socks = list()
         self.write_socks = list()
         self.templates = list()
-        self.clients_queue = queue.Queue()
+        self.node_queue = queue.Queue()
         self.task_queue = queue.Queue()
+        self.result_queue = queue.Queue()
 
-        self.condition = threading.Condition()
-        self.sock_to_task = dict()
-        self.responses = list()
-        self.client_socks = list()
+        self.task_condition = threading.Condition()
+        self.result_condition = threading.Condition()
+        self.lock = threading.Lock()
+        self.requests = dict()
+        self.responses = dict()
+        self.current_result_id = 0
 
-        self.operation_finished = False
+        self.init_connection()
 
     def set_partition(self, cluster_trees):
         self.templates = cluster_trees
-        self.responses = [dict() for _ in range(len(self.templates))]
 
     def init_connection(self):
         self.main_sock.bind(self.addr)
         self.main_sock.listen(self.max_queue)
-
         self.read_socks = [self.main_sock]
         self.write_socks = []
-        self.handle_connection()
+        request_handler = threading.Thread(target=self.handle_tasks)
+        response_handler = threading.Thread(target=self.handle_results)
+        request_handler.start()
+        response_handler.start()
 
     def handle_connection(self):
-        while not self.operation_finished:
+        while True:
             readable, writeable, exceptions = select.select(self.read_socks, self.write_socks, self.read_socks)
             for sock in readable:
                 if sock is self.main_sock:
                     connection, client_addr = sock.accept()
-                    logger.info(f"[CONNECTION ESTABLISHED] connection has been established from {client_addr}...")
-                    logger.info(f"[ACTIVE CONNECTIONS] {len(self.read_socks)} active connection(s)...")
+                    ip, port = client_addr
+                    logger.info(f"[CONNECTION ESTABLISHED] connection has been established from {ip}, {port}")
+                    logger.info(f"[ACTIVE CONNECTIONS] {len(self.read_socks)} active connection(s)")
                     self.read_socks.append(connection)
                 else:
                     packet = self.recv_msg(sock)
-                    msg_fmt = None
                     if packet:
+                        msg_fmt = None
                         if sock not in self.write_socks:
                             self.write_socks.append(sock)
                         op_code, reserved, data = packet
                         if op_code == 1:
                             template_id = reserved
-                            self.client_socks.append(sock)
                             self.task_queue.put((template_id, data))
+                            with self.lock:
+                                self.responses[template_id] = dict()
                             msg_fmt = f"processing request (id={template_id})"
                         elif op_code == 3:
                             task_group_id = reserved
-                            thread = threading.Thread(target=self.handle_results, args=(sock, task_group_id))
-                            thread.start()
                             logger.info(f"[DATA RECEIVED] get results request (id={task_group_id})")
                         elif op_code == 4:
-                            self.clients_queue.put(sock)
+                            self.node_queue.put(sock)
+                            with self.task_condition:
+                                self.task_condition.notify()
                             ip, port = sock.getsockname()
                             logger.info(f"[TASK FINISHED] {ip} executed {data} task(s)")
-                            logger.info(f"[DATA RECEIVED] {ip} is currently available")
+                            logger.info(f"[TASK FINISHED] {ip} is currently available")
                         elif op_code == 6:
                             task_id = reserved
                             msg_fmt = f"process result (id={task_id})"
-                            original = self.sock_to_task[sock]
+                            with self.lock:
+                                original = self.requests[sock]
                             new = {p: data[p] for p in original if p in data and not original[p] == data[p]}
-                            with self.condition:
-                                if new:
+                            if new:
+                                with self.lock:
                                     self.responses[task_id].update(new)
-                                self.condition.notify()
+                        elif op_code == 7:
+                            self.client_sock = sock
+                            ip, port = sock.getsockname()
+                            logger.info(f"[NEW CLIENT CONNECTION] {ip} connected as a client")
                         if msg_fmt:
                             logger.info(f"[DATA RECEIVED] {msg_fmt}: {data}")
                     else:
@@ -662,38 +675,58 @@ class ClusterServer:
     def handle_tasks(self):
         op_code = 5
         while True:
-            with threading.Lock():
-                time.sleep(0.01)
-            if not self.clients_queue.empty():
-                sock = self.clients_queue.get()
+            if self.task_queue.empty():
+                with self.lock:
+                    response = self.responses.get(self.current_result_id)
+                if response:
+                    self.result_queue.put(response)
+                    with self.result_condition:
+                        self.result_condition.notify()
+                with self.task_condition:
+                    self.task_condition.wait()
+            elif self.node_queue.empty():
+                with self.task_condition:
+                    self.task_condition.wait()
+            else:
+                sock = self.node_queue.get()
                 if sock in self.write_socks:
                     data = self.task_queue.get()
                     if not data:
-                        self.clients_queue.put(sock)
+                        self.node_queue.put(sock)
                         break
                     template_id, params = data
+
+                    # Release a result
+                    if self.current_result_id < template_id:
+                        with self.lock:
+                            response = self.responses[self.current_result_id]
+                        self.result_queue.put(response)
+                        with self.result_condition:
+                            self.result_condition.notify()
+
                     task = self.templates[template_id]
                     task.set_params(params)
                     tree = task.finalize()
                     self.send_msg(sock, op_code, tree, template_id)
-                    self.sock_to_task[sock] = params
-        self.operation_finished = True
+                    with self.lock:
+                        self.requests[sock] = params
 
-    def handle_results(self, sock, task_group_id):
-        with self.condition:
-            while not self.task_queue.empty():
-                self.condition.wait()
+    def handle_results(self):
         op_code = 2
-        response = self.responses[task_group_id]
-        self.send_msg(sock, op_code, response)
-        logger.info(f"[RESPONSE SENT] parameters: {response}")
+        while True:
+            with self.result_condition:
+                self.result_condition.wait()
+            response = self.result_queue.get()
+            self.send_msg(self.client_sock, op_code, response)
+            logger.info(f"[RESPONSE SENT] response parameters (id={self.current_result_id}): {response}")
+            self.current_result_id += 1
 
     def close_sock(self, sock):
         if sock in self.write_socks:
             self.write_socks.remove(sock)
         self.read_socks.remove(sock)
         sock.close()
-        logger.info(f"[CONNECTION CLOSED] {sock} has been closed...")
+        logger.info(f"[CONNECTION CLOSED] {sock} has been closed")
 
 
 class ExecutableTree:
@@ -729,7 +762,10 @@ def str_to_ast_node(string: str):
 
 
 def exec_tree(tree, file_name=''):
-    exec(compile(tree, file_name, 'exec'), globals())
+    std_out = StringIO()
+    with redirect_stdout(std_out):
+        exec(compile(tree, file_name, 'exec'), globals())
+    logger.critical("[EXECUTION FINISHED] Program output:\n" + std_out.getvalue())
 
 
 def print_tree(tree):
@@ -737,16 +773,26 @@ def print_tree(tree):
 
 
 if __name__ == '__main__':
+    logging_file = 'Server.log'
+    fmt = '%(name)s %(asctime)s.%(msecs)03d %(message)s', '%I:%M:%S'
+    with open(logging_file, 'w'):
+        pass
+
     logger = logging.getLogger(__name__)
     logger.setLevel(logging.INFO)
-    handler = logging.StreamHandler()
-    handler.setLevel(logger.level)
-    handler.setFormatter(CustomFormatter())
-    logger.addHandler(handler)
+    stream_handler = logging.StreamHandler()
+    stream_handler.setLevel(logger.level)
+    stream_handler.setFormatter(CustomFormatter(*fmt))
+    logger.addHandler(stream_handler)
+
+    file_handler = logging.FileHandler(logging_file)
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(logging.Formatter(*fmt))
+    logger.addHandler(file_handler)
 
     file = "Examples/Matrix_Multiplication.py"
     modified_file = "Modified.py"
-    template_file = "Created.py"
+    byproduct_file = "Created.py"
     with open(file) as source:
         ast_tree = ast.parse(source.read())
 
@@ -769,9 +815,7 @@ if __name__ == '__main__':
 
         server = ClusterServer()
         server.set_partition(cluster_partitions)
-        request_handler = threading.Thread(target=server.handle_tasks)
-        request_handler.start()
-        server_thread = threading.Thread(target=server.init_connection)
+        server_thread = threading.Thread(target=server.handle_connection)
         server_thread.start()
 
         modified_code = ast.unparse(ast_tree)

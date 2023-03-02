@@ -7,7 +7,36 @@ import astpretty
 import logging
 
 
-class Client:
+class CustomFormatter(logging.Formatter):
+    """Logging colored formatter, adapted from:
+     https://alexandra-zaharia.github.io/posts/make-your-own-custom-color-formatter-with-python-logging/"""
+
+    dark_grey = "\x1b[38;5;245m"
+    bright_grey = "\x1b[38;5;250m"
+    yellow = '\x1b[38;5;136m'
+    red = '\x1b[31;20m'
+    green = '\x1b[38;5;64m'
+    reset = '\x1b[0m'
+
+    def __init__(self, level_fmt, time_fmt):
+        super().__init__()
+        self.level_fmt = level_fmt
+        self.time_fmt = time_fmt
+        self.FORMATS = {
+            logging.DEBUG: self.dark_grey + self.level_fmt + self.reset,
+            logging.INFO: self.dark_grey + self.level_fmt + self.reset,
+            logging.WARNING: self.yellow + self.level_fmt + self.reset,
+            logging.ERROR: self.red + self.level_fmt + self.reset,
+            logging.CRITICAL: self.green + self.level_fmt + self.reset
+        }
+
+    def format(self, record):
+        log_fmt = self.FORMATS.get(record.levelno)
+        formatter = logging.Formatter(log_fmt, self.time_fmt)
+        return formatter.format(record)
+
+
+class Node:
     def __init__(self, server_ip, server_port=55555, send_format="utf-8", buffer_size=1024):
         self.server_ip = server_ip
         self.server_port = server_port
@@ -34,7 +63,7 @@ class Client:
                     self.send_response(task_id)
                     self.executed_count += 1
                     self.declare_ready()
-                logging.info(f"[DATA RECEIVED] server: {tree}")
+                logger.info(f"[DATA RECEIVED] server: {tree}")
             else:
                 self.conn_sock.close()
                 break
@@ -81,7 +110,22 @@ def print_tree(tree):
 
 
 if __name__ == '__main__':
-    logging.basicConfig(format='%(asctime)s:%(message)s', datefmt='%I:%M:%S %p', level=logging.INFO)
+    logging_file = 'Server.log'
+    fmt = '%(name)s %(asctime)s.%(msecs)03d %(message)s', '%I:%M:%S'
+    with open(logging_file, 'w'):
+        pass
 
-    client = Client("192.168.68.113")
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.INFO)
+    stream_handler = logging.StreamHandler()
+    stream_handler.setLevel(logger.level)
+    stream_handler.setFormatter(CustomFormatter(*fmt))
+    logger.addHandler(stream_handler)
+
+    file_handler = logging.FileHandler(logging_file)
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(logging.Formatter(*fmt))
+    logger.addHandler(file_handler)
+
+    client = Node("192.168.68.112")
     client.init_connection()
