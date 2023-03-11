@@ -10,7 +10,6 @@ from struct import pack, unpack
 from io import StringIO
 from contextlib import redirect_stdout
 
-import astpretty
 import logging
 
 
@@ -49,14 +48,14 @@ class ClusterVisitor(ast.NodeVisitor):
             self.node = node
             self.container = container
             if isinstance(node, ast.AST):
-                self.start_line = node.lineno
-                self.end_line = node.end_lineno
+                self.lineno = node.lineno
+                self.end_lineno = node.end_lineno
             else:
-                self.start_line = 0
-                self.end_line = 0
+                self.lineno = 0
+                self.end_lineno = 0
             self.snapshot = None
 
-        def take_snapshot(self):
+        def freeze(self):
             snapshot = ClusterVisitor.Node(deepcopy(self.node), deepcopy(self.container))
             self.snapshot = snapshot
             return snapshot
@@ -116,7 +115,7 @@ class ClusterVisitor(ast.NodeVisitor):
             return "Unnamed Thread"
 
         def take_snapshot(self):
-            snapshots = [super().take_snapshot(), self.start_call.take_snapshot(), self.join_call.take_snapshot()]
+            snapshots = [super().freeze(), self.start_call.freeze(), self.join_call.freeze()]
             return snapshots
 
         def set_start_call(self, call_node, container):
@@ -126,15 +125,6 @@ class ClusterVisitor(ast.NodeVisitor):
             self.join_call = ClusterVisitor.Node(call_node, container)
 
     def __init__(self):
-        """
-        parameters: a variable name that is used to store the parameter dictionary
-        mediator_class: a name of the file and class form which the mediating object is imported
-        mediator_object: a variable name that stores the mediating object instance
-        processing_request: a function name of the mediating class for a processing request
-        template_change: a function name of the mediating class for the a template change
-        await: a function name of the mediating class for awaiting a response
-        client_file: a file name in which the client stores data temporarily
-        """
         self.names = {"parameters": "params", "mediator_class": "Mediator",
                       "mediator_object": "cluster", "processing_request": "send_request",
                       "template_change": "template_change", "await": "get_results",
@@ -179,7 +169,7 @@ class ClusterVisitor(ast.NodeVisitor):
 
     def visit_FunctionDef(self, node, initial=True):
         # If the function is called from within the code (initial=False), perform recursive visiting
-        # Otherwise if its called on a function definition (initial=True) save it's information
+        # Otherwise if it's called on a function definition (initial=True) save its information
 
         # Update the current function variable with every visit
         if initial:
@@ -205,7 +195,7 @@ class ClusterVisitor(ast.NodeVisitor):
             if isinstance(name, ast.Name):
                 self.create_thread(node, name.id)
         else:
-            if not self.current_loop.start_line < node.lineno <= self.current_loop.end_line:
+            if not self.current_loop.lineno < node.lineno <= self.current_loop.end_lineno:
                 self.parameters.update(
                     [child_node.id for child_node in node.targets if isinstance(child_node, ast.Name) and
                      child_node.id not in self.builtin_funcs]
@@ -230,7 +220,7 @@ class ClusterVisitor(ast.NodeVisitor):
             function = self.functions[func_name]
             function.set_used()
 
-            if self.current_loop.start_line < node.lineno <= self.current_loop.end_line:
+            if self.current_loop.lineno < node.lineno <= self.current_loop.end_lineno:
                 loop = self.loops[-1]
                 loop.set_nested()
                 self.find_nested_functions(function.node)
@@ -244,7 +234,7 @@ class ClusterVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_loop(self, node, loop_type):
-        if not self.current_loop.start_line < node.lineno <= self.current_loop.end_line:
+        if not self.current_loop.lineno < node.lineno <= self.current_loop.end_lineno:
             if loop_type == ObjectType.FOR:
                 loop = self.Loop(node, self.current_container, ObjectType.FOR)
                 if isinstance(node.target, ast.Name):
@@ -253,7 +243,7 @@ class ClusterVisitor(ast.NodeVisitor):
                 loop = self.Loop(node, self.current_container, ObjectType.WHILE)
             self.loops.append(loop)
             self.current_loop = loop
-            if self.current_func.start_line < node.lineno <= self.current_func.end_line:
+            if self.current_func.lineno < node.lineno <= self.current_func.end_lineno:
                 loop.set_within_func(self.current_func)
         else:
             loop = self.loops[-1]
@@ -274,7 +264,8 @@ class ClusterVisitor(ast.NodeVisitor):
                         and name.id not in self.builtin_funcs]
 
         # Make sure that the thread function call is not recursive
-        if func_name != self.current_func.name:
+        if not self.current_func.lineno < assign_node.lineno <= self.current_func.end_lineno \
+                or func_name != self.current_func.name:
             thread = self.Thread(assign_node, self.current_container, args, func_name, name)
             self.threads.append(thread)
             function = self.functions[func_name]
@@ -308,11 +299,18 @@ class ClusterModifier(ast.NodeTransformer):
         self.update_params_node = str_to_ast_node(
             f"exec('\\n'.join([f'{{key}} = {{value}}' for key, value in {self.names['parameters']}.items()]))"
         )
-        self.change_template_node = str_to_ast_node(
-            f"{self.names['parameters']} = {self.names['mediator_object']}.{self.names['template_change']}()"
-        )
 
         self.setup_tree()
+
+    @staticmethod
+    def exhaust_generator(item, generator):
+        for value in generator:
+            if value is item:
+                break
+
+    @staticmethod
+    def lineno_difference(node1, node2):
+        return abs(node2.lineno - node1.end_lineno)
 
     @property
     def param_dict(self):
@@ -324,7 +322,7 @@ class ClusterModifier(ast.NodeTransformer):
         return param_dict
 
     @property
-    def send_request_node(self):
+    def processing_request_node(self):
         return str_to_ast_node(
             f"{self.names['mediator_object']}.{self.names['processing_request']}"
             f"({self.templates_count}, {self.param_dict})"
@@ -337,24 +335,24 @@ class ClusterModifier(ast.NodeTransformer):
             f"({self.templates_count})"
         )
 
-    def from_params_to_instructions(self):
+    def params_to_instructions(self):
         for param in self.parameters:
             assign_node = str_to_ast_node(f"{param} = {self.names['parameters']}['{param}']")
             self.instructions.append(assign_node)
 
     def setup_tree(self):
-        node = self.visitor.module_node
+        module_node = self.visitor.module_node
         count = 0
         # Import the mediator class
         new_import_node = str_to_ast_node(
             f"from {self.names['mediator_class']} import {self.names['mediator_class']}")
-        node.body.insert(count, new_import_node)
+        module_node.body.insert(count, new_import_node)
 
         # Create and inject the mediator object
-        while isinstance(node.body[count], (ast.FunctionDef, ast.Import, ast.ImportFrom)):
+        while isinstance(module_node.body[count], (ast.FunctionDef, ast.Import, ast.ImportFrom)):
             count += 1
         new_obj_node = str_to_ast_node(f"{self.names['mediator_object']} = {self.names['mediator_class']}()")
-        node.body.insert(count, new_obj_node)
+        module_node.body.insert(count, new_obj_node)
 
     def modify_loop(self, loop):
         loop.make_node_copy()
@@ -367,60 +365,76 @@ class ClusterModifier(ast.NodeTransformer):
             body.insert(0, self.global_mediator_node)
             insertion_index = get_node_locations(func_node, loop.node)
         else:
-            body = self.visitor.module_node.body
-            insertion_index = get_node_locations(self.visitor.module_node, loop.node)
+            body = self.module_node.body
+            insertion_index = get_node_locations(self.module_node, loop.node)
         body.insert(insertion_index + 1, self.change_template_node)
 
         if loop.loop_type == self.visitor.Type.FOR:
             body.insert(insertion_index + 1, self.update_params_node)
-            loop.node.body = [self.send_request_node]
+            loop.node.body = [self.processing_request_node]
         elif loop.loop_type == self.visitor.Type.WHILE:
-            loop.node.body = [self.instructions, self.send_request_node, self.get_results_node,
+            loop.node.body = [self.instructions, self.processing_request_node, self.get_results_node,
                               self.update_params_node]
 
         return loop
 
-    def modify_thread(self, thread):
-        # Replace the Thread() creations
-        self.generic_visit(thread.container, thread.node,
-                           "is_custom_visit", "is_container_node",
-                           remove=True)
+    def modify_threads(self):
+        sorted_by_container = dict()
+        for thread in self.visitor.threads:
+            if thread.start_call and thread.join_call:
+                if not sorted_by_container.get(thread.join_call.container):
+                    sorted_by_container[thread.join_call.container] = [thread]
+                else:
+                    sorted_by_container[thread.join_call.container].append(thread)
+        self.instructions = (self.thread_to_instructions(thread) for _, threads in sorted_by_container.items()
+                             for thread in threads)
 
-        # Save a snapshot of the current state
-        thread.take_snapshot()
+        for container, threads in sorted_by_container.items():
+            threads.sort(key=lambda t: t.join_call.lineno)
+            last_thread = threads[0]
+            thread_group = [last_thread]
+            group_args = set(last_thread.args)
+            body = ast.iter_child_nodes(container)
+            self.exhaust_generator(last_thread.join_call.node, body)
 
-        # Perform all other changes
-        if thread.start_call and thread.join_call:
-            execution_node = self.send_request_node
-            await_node = self.get_results_node
+            for thread in threads[1:]:
+                if self.lineno_difference(last_thread.join_call, thread.join_call) > 1:
+                    for node in body:
+                        if node is thread.join_call.node:
+                            break
+                        else:
+                            for child in ast.walk(node):
+                                if isinstance(child, ast.Name):
+                                    if child.id in group_args:
+                                        self.generic_visit(container, thread_group,
+                                                           "is_custom_visit", "is_container_node", "visit_threads")
+                                        thread_group = list()
+                                        group_args = set()
+                                        self.exhaust_generator(thread.join_call.node, body)
+                                        self.create_template()
+                                        break
+                            else:
+                                continue
+                            break
+                else:
+                    try:
+                        next(body)
+                    except StopIteration:
+                        pass
+                thread_group.append(thread)
+                group_args.update(thread.args)
 
-            # Replace the start() call
-            self.generic_visit(thread.start_call.container, thread.start_call.node,
-                               "is_custom_visit", "is_container_node",
-                               replace=execution_node)
-            # Replace the join() call
-            self.generic_visit(thread.join_call.container, thread.join_call.node,
-                               "is_custom_visit", "is_container_node",
-                               replace=await_node, add=self.update_params_node, add_after=await_node)
-        elif thread.start_call:
-            pass
-        elif thread.join_call:
-            pass
+            self.generic_visit(container, thread_group,
+                               "is_custom_visit", "is_container_node", "visit_threads")
+            self.create_template()
 
-        # self.from_params_to_instructions()
-        self.from_thread_to_instructions(thread)
-
-    def from_thread_to_instructions(self, thread):
+    def thread_to_instructions(self, thread):
         func_str = f"{thread.func_name}("
         for arg in thread.args:
             func_str += f"{arg}, "
-            # assign_node = str_to_ast_node(f"{arg} = {self.names['parameters']}['{arg}']")
-            # self.instructions.append(assign_node)
         func_str = func_str[:-2] + ")"
         expr_node = str_to_ast_node(func_str)
-
-        self.instructions.append(self.update_params_node)
-        self.instructions.append(expr_node)
+        return [expr_node]
 
     def custom_visit(self, obj):
         enum_type = ObjectType(type(obj))
@@ -428,8 +442,8 @@ class ClusterModifier(ast.NodeTransformer):
         visitor = getattr(self, method)
         visitor(obj)
 
-    def generic_visit(self, node, modified_node=None, *flags, **operations):
-        allowed_flags = ["is_custom_visit", "is_container_node"]
+    def generic_visit(self, node, modified_nodes=None, *flags, **operations):
+        allowed_flags = ["is_custom_visit", "is_container_node", "visit_threads"]
         allowed_operations = ["remove", "replace", "add", "add_after", "add_before"]
         conditions = {element: False for element in allowed_flags + allowed_operations}
 
@@ -449,34 +463,69 @@ class ClusterModifier(ast.NodeTransformer):
 
         # Override the functionality of generic_visit()
         if conditions["is_custom_visit"]:
-            if node is modified_node:
-                if conditions["remove"]:
-                    return None
-                elif conditions["replace"]:
-                    return operations["replace"]
-            else:
-                if conditions["is_container_node"]:
+            if conditions["is_container_node"]:
 
-                    # If add flag is set than node.body should be created with additional logic
-                    if conditions["add"]:
-                        new_body = []
-                        for n in node.body:
-                            new_n = self.generic_visit(n, modified_node, "is_custom_visit", **operations)
-                            if not new_n:
-                                continue
-                            if new_n is operations.get("add_before"):
-                                new_body.append(operations["add"])
+                # If other flags are set than node.body should be created with additional logic
+                if conditions["visit_threads"]:
+                    new_body = []
+                    last_join_call = modified_nodes[-1].join_call.node
+                    operations["add"] = last_join_call
+                    for n in node.body:
+                        new_n = self.generic_visit(n, modified_nodes, "is_custom_visit", "visit_threads",
+                                                   **operations)
+                        if not new_n:
+                            continue
+                        elif new_n is last_join_call:
+                            new_body.append(self.get_results_node)
+                            new_body.append(self.update_params_node)
+                        else:
                             new_body.append(new_n)
-                            if new_n is operations.get("add_after"):
-                                new_body.append(operations["add"])
-                        node.body = new_body
 
-                    # Otherwise list comprehension is enough
-                    else:
-                        node.body = [
-                            self.generic_visit(n, modified_node, "is_custom_visit", **operations)
-                            for n in node.body if n is not None
-                        ]
+                    node.body = new_body
+
+                elif conditions["add"]:
+                    if isinstance(modified_nodes, (list, tuple, set)):
+                        raise AttributeError("'modified nodes' must not be an iterable when preforming "
+                                             "add operations")
+
+                    new_body = []
+                    for n in node.body:
+                        new_n = self.generic_visit(n, modified_nodes, "is_custom_visit", **operations)
+                        if not new_n:
+                            continue
+                        elif new_n is operations.get("add_before"):
+                            new_body.append(operations["add"])
+                        new_body.append(new_n)
+                        if new_n is operations.get("add_after"):
+                            new_body.append(operations["add"])
+                    node.body = new_body
+
+                # Otherwise list comprehension is enough
+                else:
+                    node.body = [
+                        self.generic_visit(n, modified_nodes, "is_custom_visit", **operations)
+                        for n in node.body if n is not None
+                    ]
+            else:
+                if conditions["visit_threads"]:
+                    for thread in modified_nodes:
+                        if node is thread.node:
+                            return None
+                        elif node is thread.start_call.node:
+                            self.parameters = thread.args
+                            return self.processing_request_node
+                        elif node is operations["add"]:
+                            return node
+                        elif node is thread.join_call.node:
+                            return None
+                    return node
+
+                elif node in modified_nodes:
+                    if conditions["remove"]:
+                        return None
+                    elif conditions["replace"]:
+                        return operations["replace"]
+
             return node
 
         # If the visit is not custom use the original generic_visit method
@@ -494,20 +543,13 @@ class ClusterModifier(ast.NodeTransformer):
         self.generic_visit(node)
         return None
 
-    def create_template(self, loop=None):
-        write_to_file = [str_to_ast_node(
-            f"""with open('{self.names['client_file']}', 'w') as file:
-                    file.write(str({self.param_dict}))"""
-        )]
-        if loop:
-            self.instructions += loop.node_copy.body
-
+    def create_template(self):
         template = ast.Module(
-            body=self.imports + self.original_functions + self.instructions + write_to_file,
+            body=self.imports + self.original_functions,
             type_ignores=[]
         )
-        self.templates[self.templates_count] = ExecutableTree(
-            template, len(self.imports + self.original_functions), self.names['parameters']
+        self.templates[self.templates_count] = TaskMaker(
+            template, len(self.imports + self.original_functions), self.instructions
         )
 
         self.templates_count += 1
@@ -517,15 +559,10 @@ class ClusterModifier(ast.NodeTransformer):
             if loop.is_nested:
                 self.generic_visit(loop.node)
                 loop_copy = self.modify_loop(loop)
-                self.create_template(loop=loop_copy)
-                self.clear_data()
-
-        for thread in self.visitor.threads:
-            if thread.name:
-                self.parameters.update(thread.args)
-                self.custom_visit(thread)
                 self.create_template()
                 self.clear_data()
+
+        self.modify_threads()
 
     def clear_data(self):
         self.parameters.clear()
@@ -556,7 +593,7 @@ class ClusterServer:
     #  7      |  initiate connection
 
     def __init__(self, port=55555, send_format="utf-8", buffer_size=1024, max_queue=5):
-        self.ip = socket.gethostbyname(socket.gethostname())
+        self.ip = "0.0.0.0"
         self.port = port
         self.addr = (self.ip, self.port)
         self.format = send_format
@@ -705,9 +742,8 @@ class ClusterServer:
                             self.result_condition.notify()
 
                     task = self.templates[template_id]
-                    task.set_params(params)
-                    tree = task.finalize()
-                    self.send_msg(sock, op_code, tree, template_id)
+                    task.params = params
+                    self.send_msg(sock, op_code, task.to_executable(), template_id)
                     with self.lock:
                         self.requests[sock] = params
 
@@ -729,27 +765,44 @@ class ClusterServer:
         logger.info(f"[CONNECTION CLOSED] {sock} has been closed")
 
 
-class ExecutableTree:
-    def __init__(self, tree, inject_index, params):
+class TaskMaker:
+    def __init__(self, tree, inject_index, instructions):
         self.tree = tree
         self.index = inject_index
-        self.params_name = params
+        self.instructions = instructions
         self.params = None
 
-    def set_params(self, params):
-        self.params = params
+    @property
+    def instruction_block(self):
+        return next(self.instructions)
+
+    @staticmethod
+    def extend_in_index(lst, iterable, index):
+        for item in iterable:
+            lst.insert(index, item)
 
     def finalize(self):
         tree = deepcopy(self.tree)
-        new_assign_node = f"{self.params_name} = {self.params}"
-        param_node = str_to_ast_node(new_assign_node)
-        tree.body.insert(self.index, param_node)
+        block = self.instruction_block
+        self.extend_in_index(self.tree.body, block, self.index + len(block))
 
         tmp_file = "Created.py"
         with open(tmp_file, 'w') as f:
             f.write(ast.unparse(tree))
 
         return ast.parse(ast.unparse(tree))
+
+    def to_executable(self):
+        return ExecutableTree(self.finalize(), self.params)
+
+
+class ExecutableTree:
+    def __init__(self, tree, params):
+        self.tree = tree
+        self.params = params
+
+    def exec_tree(self, file_name=''):
+        exec(compile(self.tree, file_name, 'exec'), {'params': self.params})
 
 
 def str_to_ast_node(string: str):
@@ -768,10 +821,6 @@ def exec_tree(tree, file_name=''):
     logger.critical("[EXECUTION FINISHED] Program output:\n" + std_out.getvalue())
 
 
-def print_tree(tree):
-    astpretty.pprint(tree)
-
-
 if __name__ == '__main__':
     logging_file = 'Server.log'
     fmt = '%(name)s %(asctime)s.%(msecs)03d %(message)s', '%I:%M:%S'
@@ -786,7 +835,7 @@ if __name__ == '__main__':
     logger.addHandler(stream_handler)
 
     file_handler = logging.FileHandler(logging_file)
-    file_handler.setLevel(logging.DEBUG)
+    file_handler.setLevel(logger.level)
     file_handler.setFormatter(logging.Formatter(*fmt))
     logger.addHandler(file_handler)
 

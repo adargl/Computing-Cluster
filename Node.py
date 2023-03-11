@@ -2,8 +2,8 @@ import ast
 import pickle
 import socket
 from struct import pack, unpack
+from copy import deepcopy
 
-import astpretty
 import logging
 
 
@@ -36,6 +36,15 @@ class CustomFormatter(logging.Formatter):
         return formatter.format(record)
 
 
+class ExecutableTree:
+    def __init__(self, tree, params):
+        self.tree = tree
+        self.params = params
+
+    def exec_tree(self, file_name=''):
+        exec(compile(self.tree, file_name, 'exec'), self.params)
+
+
 class Node:
     def __init__(self, server_ip, server_port=55555, send_format="utf-8", buffer_size=1024):
         self.server_ip = server_ip
@@ -46,7 +55,7 @@ class Node:
         self.conn_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
         self.executed_count = 0
-        self.file = "shared.txt"
+        self.params = None
 
     def init_connection(self):
         self.conn_sock.connect(self.server_addr)
@@ -57,13 +66,14 @@ class Node:
         while True:
             packet = self.recv_msg(self.conn_sock)
             if packet:
-                op_code, task_id, tree = packet
+                op_code, task_id, executable_tree = packet
                 if op_code == 5:
-                    exec_tree(tree)
-                    self.send_response(task_id)
+                    self.params = executable_tree.params
+                    executable_tree.exec_tree()
                     self.executed_count += 1
+                    self.send_response(task_id)
                     self.declare_ready()
-                logger.info(f"[DATA RECEIVED] server: {tree}")
+                logger.info(f"[DATA RECEIVED] server id={task_id}): {executable_tree.params}")
             else:
                 self.conn_sock.close()
                 break
@@ -96,17 +106,8 @@ class Node:
 
     def send_response(self, task_id):
         op_code = 6
-        with open(self.file) as file:
-            params = ast.literal_eval(file.read())
-        self.send_msg(self.conn_sock, op_code, params, task_id)
-
-
-def exec_tree(tree, file_name=''):
-    exec(compile(tree, file_name, 'exec'), globals())
-
-
-def print_tree(tree):
-    astpretty.pprint(tree)
+        self.send_msg(self.conn_sock, op_code, self.params, task_id)
+        logger.info(f"[RESPONSE SENT] response parameters (id={task_id}): {self.params}")
 
 
 if __name__ == '__main__':
@@ -127,5 +128,5 @@ if __name__ == '__main__':
     file_handler.setFormatter(logging.Formatter(*fmt))
     logger.addHandler(file_handler)
 
-    client = Node("192.168.68.112")
+    client = Node("localhost")
     client.init_connection()
