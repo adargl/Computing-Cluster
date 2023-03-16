@@ -79,19 +79,6 @@ class Mediator:
         return response
 
 
-class Handler:
-    def __init__(self):
-        self.mediator = Mediator()
-        self.concurrent = 0
-
-    def set_connection_concurrent(self):
-        self.concurrent = 1
-
-    def handle_connection(self):
-        if self.concurrent:
-            pass
-
-
 fmt = '%(name)s %(asctime)s.%(msecs)03d %(message)s', '%I:%M:%S'
 
 logger = logging.getLogger(__name__)

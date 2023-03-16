@@ -1,8 +1,6 @@
-import ast
 import pickle
 import socket
 from struct import pack, unpack
-from copy import deepcopy
 
 import logging
 
@@ -37,12 +35,13 @@ class CustomFormatter(logging.Formatter):
 
 
 class ExecutableTree:
-    def __init__(self, tree, params):
+    def __init__(self, tree, params_name, params):
         self.tree = tree
+        self.params_name = params_name
         self.params = params
 
     def exec_tree(self, file_name=''):
-        exec(compile(self.tree, file_name, 'exec'), self.params)
+        exec(compile(self.tree, file_name, 'exec'), {self.params_name: self.params})
 
 
 class Node:
@@ -69,11 +68,11 @@ class Node:
                 op_code, task_id, executable_tree = packet
                 if op_code == 5:
                     self.params = executable_tree.params
+                    logger.info(f"[DATA RECEIVED] request  (id={task_id}): {executable_tree.params}")
                     executable_tree.exec_tree()
                     self.executed_count += 1
                     self.send_response(task_id)
                     self.declare_ready()
-                logger.info(f"[DATA RECEIVED] server id={task_id}): {executable_tree.params}")
             else:
                 self.conn_sock.close()
                 break
@@ -107,7 +106,7 @@ class Node:
     def send_response(self, task_id):
         op_code = 6
         self.send_msg(self.conn_sock, op_code, self.params, task_id)
-        logger.info(f"[RESPONSE SENT] response parameters (id={task_id}): {self.params}")
+        logger.info(f"[RESPONSE SENT] response (id={task_id}): {self.params}")
 
 
 if __name__ == '__main__':

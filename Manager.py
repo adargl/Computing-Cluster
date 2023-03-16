@@ -292,12 +292,16 @@ class ClusterModifier(ast.NodeTransformer):
         self.templates = dict()
         self.global_nodes = list()
         self.instructions = list()
-        self.parameters = set()
+        self.current_params = set()
+        self.all_params = set()
         self.max_concurrent_loops = 4
 
-        # Create the new nodes that do not depend on variables values
-        self.update_params_node = str_to_ast_node(
+        # Create new nodes that do not depend on variables values
+        self.assign_results_node = str_to_ast_node(
             f"exec('\\n'.join([f'{{key}} = {{value}}' for key, value in {self.names['parameters']}.items()]))"
+        )
+        self.assign_params_node = str_to_ast_node(
+            f"globals().update({self.names['parameters']})"
         )
 
         self.setup_tree()
@@ -312,10 +316,19 @@ class ClusterModifier(ast.NodeTransformer):
     def lineno_difference(node1, node2):
         return abs(node2.lineno - node1.end_lineno)
 
+    @staticmethod
+    def thread_to_instructions(thread):
+        func_str = f"{thread.func_name}("
+        for arg in thread.args:
+            func_str += f"{arg}, "
+        func_str = func_str[:-2] + ")"
+        expr_node = str_to_ast_node(func_str)
+        return expr_node
+
     @property
     def param_dict(self):
         param_dict = "{"
-        for parameter in self.parameters:
+        for parameter in self.current_params:
             param_dict += f"'{parameter}': {parameter}, "
         param_dict = param_dict[:-2] + "}"
 
@@ -335,8 +348,18 @@ class ClusterModifier(ast.NodeTransformer):
             f"({self.templates_count})"
         )
 
+    def assign_results_nodes(self, param_names):
+        variable_name = "param_names"
+        yield str_to_ast_node(f"{variable_name} = {self.names['parameters']}.keys()")
+
+        for name in param_names:
+            yield str_to_ast_node(
+                f"if '{name}' in {variable_name}:"
+                f"  {name} = {self.names['parameters']}['{name}']"
+            )
+
     def params_to_instructions(self):
-        for param in self.parameters:
+        for param in self.current_params:
             assign_node = str_to_ast_node(f"{param} = {self.names['parameters']}['{param}']")
             self.instructions.append(assign_node)
 
@@ -370,11 +393,11 @@ class ClusterModifier(ast.NodeTransformer):
         body.insert(insertion_index + 1, self.change_template_node)
 
         if loop.loop_type == self.visitor.Type.FOR:
-            body.insert(insertion_index + 1, self.update_params_node)
+            body.insert(insertion_index + 1, self.assign_results_node)
             loop.node.body = [self.processing_request_node]
         elif loop.loop_type == self.visitor.Type.WHILE:
             loop.node.body = [self.instructions, self.processing_request_node, self.get_results_node,
-                              self.update_params_node]
+                              self.assign_results_node]
 
         return loop
 
@@ -393,7 +416,8 @@ class ClusterModifier(ast.NodeTransformer):
             threads.sort(key=lambda t: t.join_call.lineno)
             last_thread = threads[0]
             thread_group = [last_thread]
-            group_args = set(last_thread.args)
+            self.all_params.clear()
+            self.all_params.update(last_thread.args)
             body = ast.iter_child_nodes(container)
             self.exhaust_generator(last_thread.join_call.node, body)
 
@@ -405,11 +429,11 @@ class ClusterModifier(ast.NodeTransformer):
                         else:
                             for child in ast.walk(node):
                                 if isinstance(child, ast.Name):
-                                    if child.id in group_args:
+                                    if child.id in self.all_params:
                                         self.generic_visit(container, thread_group,
                                                            "is_custom_visit", "is_container_node", "visit_threads")
                                         thread_group = list()
-                                        group_args = set()
+                                        self.all_params.clear()
                                         self.exhaust_generator(thread.join_call.node, body)
                                         self.create_template()
                                         break
@@ -422,19 +446,11 @@ class ClusterModifier(ast.NodeTransformer):
                     except StopIteration:
                         pass
                 thread_group.append(thread)
-                group_args.update(thread.args)
+                self.all_params.update(thread.args)
 
             self.generic_visit(container, thread_group,
                                "is_custom_visit", "is_container_node", "visit_threads")
             self.create_template()
-
-    def thread_to_instructions(self, thread):
-        func_str = f"{thread.func_name}("
-        for arg in thread.args:
-            func_str += f"{arg}, "
-        func_str = func_str[:-2] + ")"
-        expr_node = str_to_ast_node(func_str)
-        return [expr_node]
 
     def custom_visit(self, obj):
         enum_type = ObjectType(type(obj))
@@ -477,7 +493,7 @@ class ClusterModifier(ast.NodeTransformer):
                             continue
                         elif new_n is last_join_call:
                             new_body.append(self.get_results_node)
-                            new_body.append(self.update_params_node)
+                            new_body.extend(self.assign_results_nodes(self.all_params))
                         else:
                             new_body.append(new_n)
 
@@ -512,7 +528,7 @@ class ClusterModifier(ast.NodeTransformer):
                         if node is thread.node:
                             return None
                         elif node is thread.start_call.node:
-                            self.parameters = thread.args
+                            self.current_params = thread.args
                             return self.processing_request_node
                         elif node is operations["add"]:
                             return node
@@ -532,9 +548,9 @@ class ClusterModifier(ast.NodeTransformer):
         return super().generic_visit(node)
 
     def visit_Name(self, node):
-        if node.id in self.visitor.parameters and not \
+        if node.id in self.visitor.current_params and not \
                 (node.id in self.visitor.functions.keys() or node.id in self.visitor.builtin_funcs):
-            self.parameters.add(node.id)
+            self.current_params.add(node.id)
         self.generic_visit(node)
         return node
 
@@ -545,11 +561,11 @@ class ClusterModifier(ast.NodeTransformer):
 
     def create_template(self):
         template = ast.Module(
-            body=self.imports + self.original_functions,
+            body=self.imports + self.original_functions + [self.assign_params_node],
             type_ignores=[]
         )
         self.templates[self.templates_count] = TaskMaker(
-            template, len(self.imports + self.original_functions), self.instructions
+            template, len(self.imports + self.original_functions) + 1, self.instructions, self.names['parameters']
         )
 
         self.templates_count += 1
@@ -565,7 +581,7 @@ class ClusterModifier(ast.NodeTransformer):
         self.modify_threads()
 
     def clear_data(self):
-        self.parameters.clear()
+        self.current_params.clear()
         self.global_nodes = []
         self.instructions = []
 
@@ -672,7 +688,21 @@ class ClusterServer:
                             new = {p: data[p] for p in original if p in data and not original[p] == data[p]}
                             if new:
                                 with self.lock:
-                                    self.responses[task_id].update(new)
+                                    response = self.responses[task_id]
+                                    if response:
+                                        for key in response.keys():
+                                            org_value, new_value = original[key], new[key]
+                                            if type(org_value) == type(new_value):
+                                                if isinstance(org_value, list):
+                                                    for i in range(len(new_value)):
+                                                        if org_value[i] != new_value[i]:
+                                                            response[key][i] = new_value[i]
+                                                    else:
+                                                        org_value.extend(new_value[i:])
+                                            else:
+                                                response[key] = new[key]
+                                    else:
+                                        response.update(new)
                         elif op_code == 7:
                             self.client_sock = sock
                             ip, port = sock.getsockname()
@@ -717,6 +747,8 @@ class ClusterServer:
                     response = self.responses.get(self.current_result_id)
                 if response:
                     self.result_queue.put(response)
+                    with self.task_condition:
+                        self.task_condition.wait()
                     with self.result_condition:
                         self.result_condition.notify()
                 with self.task_condition:
@@ -766,10 +798,11 @@ class ClusterServer:
 
 
 class TaskMaker:
-    def __init__(self, tree, inject_index, instructions):
+    def __init__(self, tree, inject_index, instructions, params_name):
         self.tree = tree
         self.index = inject_index
         self.instructions = instructions
+        self.params_name = params_name
         self.params = None
 
     @property
@@ -778,13 +811,16 @@ class TaskMaker:
 
     @staticmethod
     def extend_in_index(lst, iterable, index):
-        for item in iterable:
-            lst.insert(index, item)
+        if hasattr(iterable, '__iter__'):
+            for item in iterable:
+                lst.insert(index, item)
+        else:
+            lst.insert(index, iterable)
 
     def finalize(self):
         tree = deepcopy(self.tree)
         block = self.instruction_block
-        self.extend_in_index(self.tree.body, block, self.index + len(block))
+        self.extend_in_index(tree.body, block, self.index)
 
         tmp_file = "Created.py"
         with open(tmp_file, 'w') as f:
@@ -793,16 +829,17 @@ class TaskMaker:
         return ast.parse(ast.unparse(tree))
 
     def to_executable(self):
-        return ExecutableTree(self.finalize(), self.params)
+        return ExecutableTree(self.finalize(), self.params_name, self.params)
 
 
 class ExecutableTree:
-    def __init__(self, tree, params):
+    def __init__(self, tree, params_name, params):
         self.tree = tree
+        self.params_name = params_name
         self.params = params
 
     def exec_tree(self, file_name=''):
-        exec(compile(self.tree, file_name, 'exec'), {'params': self.params})
+        exec(compile(self.tree, file_name, 'exec'), {self.params_name: self.params})
 
 
 def str_to_ast_node(string: str):
@@ -817,8 +854,9 @@ def str_to_ast_node(string: str):
 def exec_tree(tree, file_name=''):
     std_out = StringIO()
     with redirect_stdout(std_out):
-        exec(compile(tree, file_name, 'exec'), globals())
-    logger.critical("[EXECUTION FINISHED] Program output:\n" + std_out.getvalue())
+        exec(compile(tree, file_name, 'exec'), {'builtins': globals()['__builtins__']})
+    # Remove the last char from the output since it is always '\n'
+    logger.critical("[EXECUTION FINISHED] Program output:\n" + std_out.getvalue()[:-1])
 
 
 if __name__ == '__main__':
