@@ -216,7 +216,7 @@ class ClusterVisitor(ast.NodeVisitor):
 
     def visit_Call(self, node):
         if not self.is_builtin(node):
-            func_name = node.func.id
+            func_name = node.func.id if isinstance(node.func, ast.Name) else None
             function = self.functions[func_name]
             function.set_used()
 
@@ -325,6 +325,10 @@ class ClusterModifier(ast.NodeTransformer):
         expr_node = str_to_ast_node(func_str)
         return expr_node
 
+    @staticmethod
+    def loop_to_instructions(loop):
+        return loop.node.body
+
     @property
     def param_dict(self):
         param_dict = "{"
@@ -378,28 +382,10 @@ class ClusterModifier(ast.NodeTransformer):
         module_node.body.insert(count, new_obj_node)
 
     def modify_loop(self, loop):
-        loop.make_node_copy()
-
-        if loop.is_within_func:
-            func_node = loop.function.node
-            loop.function.replace_node_with_copy()
-            body = func_node.body
-            body.insert(0, self.global_nodes)
-            body.insert(0, self.global_mediator_node)
-            insertion_index = get_node_locations(func_node, loop.node)
-        else:
-            body = self.module_node.body
-            insertion_index = get_node_locations(self.module_node, loop.node)
-        body.insert(insertion_index + 1, self.change_template_node)
-
-        if loop.loop_type == self.visitor.Type.FOR:
-            body.insert(insertion_index + 1, self.assign_results_node)
-            loop.node.body = [self.processing_request_node]
-        elif loop.loop_type == self.visitor.Type.WHILE:
-            loop.node.body = [self.instructions, self.processing_request_node, self.get_results_node,
-                              self.assign_results_node]
-
-        return loop
+        self.instructions = self.loop_to_instructions(loop)
+        loop.body = self.processing_request_node
+        self.generic_visit(loop.node,
+                           "is_custom_visit", "add", add_after=loop.node)
 
     def modify_threads(self):
         sorted_by_container = dict()
@@ -500,7 +486,7 @@ class ClusterModifier(ast.NodeTransformer):
                     node.body = new_body
 
                 elif conditions["add"]:
-                    if isinstance(modified_nodes, (list, tuple, set)):
+                    if is_iterable(modified_nodes):
                         raise AttributeError("'modified nodes' must not be an iterable when preforming "
                                              "add operations")
 
@@ -574,7 +560,7 @@ class ClusterModifier(ast.NodeTransformer):
         for loop in self.visitor.loops:
             if loop.is_nested:
                 self.generic_visit(loop.node)
-                loop_copy = self.modify_loop(loop)
+                self.modify_loop(loop)
                 self.create_template()
                 self.clear_data()
 
@@ -631,6 +617,7 @@ class ClusterServer:
         self.requests = dict()
         self.responses = dict()
         self.current_result_id = 0
+        self.close_connections = False
 
         self.init_connection()
 
@@ -648,7 +635,7 @@ class ClusterServer:
         response_handler.start()
 
     def handle_connection(self):
-        while True:
+        while not self.close_connections:
             readable, writeable, exceptions = select.select(self.read_socks, self.write_socks, self.read_socks)
             for sock in readable:
                 if sock is self.main_sock:
@@ -793,8 +780,9 @@ class ClusterServer:
         if sock in self.write_socks:
             self.write_socks.remove(sock)
         self.read_socks.remove(sock)
+        ip, port = sock.getsockname()
         sock.close()
-        logger.info(f"[CONNECTION CLOSED] {sock} has been closed")
+        logger.info(f"[CONNECTION CLOSED] connection from {ip}, {port} has been closed")
 
 
 class TaskMaker:
@@ -811,7 +799,7 @@ class TaskMaker:
 
     @staticmethod
     def extend_in_index(lst, iterable, index):
-        if hasattr(iterable, '__iter__'):
+        if is_iterable(iterable):
             for item in iterable:
                 lst.insert(index, item)
         else:
@@ -851,6 +839,10 @@ def str_to_ast_node(string: str):
     return None
 
 
+def is_iterable(obj: object):
+    return hasattr(obj, '__iter__')
+
+
 def exec_tree(tree, file_name=''):
     std_out = StringIO()
     with redirect_stdout(std_out):
@@ -877,7 +869,7 @@ if __name__ == '__main__':
     file_handler.setFormatter(logging.Formatter(*fmt))
     logger.addHandler(file_handler)
 
-    file = "Examples/Matrix_Multiplication.py"
+    file = "Examples/CaesarCipher.py"
     modified_file = "Modified.py"
     byproduct_file = "Created.py"
     with open(file) as source:

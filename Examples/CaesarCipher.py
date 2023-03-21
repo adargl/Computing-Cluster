@@ -1,5 +1,4 @@
-import ast
-import multiprocessing
+import enchant
 
 
 def encrypt(message, key):
@@ -31,21 +30,39 @@ def decrypt(message, key):
     return result
 
 
-msg = "Secret message"
-k = 21
-encrypted = encrypt(msg, k)
-print("Encrypted message:", encrypted)
-k = 10
+def is_sentence(sentence, language):
+    """
+    Determines whether the input sentence is a proper English sentence or not.
+    Returns a boolean value.
+    """
+    d = enchant.Dict(language)
+    words = sentence.split()
+    for word in words:
+        if not d.check(word):
+            return False
+    return True
 
-for key in range(26):
-    if decrypt(encrypted, key) == msg:
-        k = key
+
+def find_best_word(encrypted_msg, language):
+    """
+    Finds the first word in the input list that is a proper English word.
+    Returns None if no such word is found.
+    """
+    for k in range(26):
+        decrypted_msg = decrypt(encrypted_msg, k)
+        if is_sentence(decrypted_msg, language):
+            return k, decrypted_msg
+    return None, None
+
+
+msg = "Secret message"
+encrypted = encrypt(msg, 21)
+language = "en_US"
+key, word_match = find_best_word(encrypted, language)
 
 print(
     f"""----------Final----------
-Key found: {k}
-Decrypted message: {decrypt(encrypted, k)}
+Key found: {key}
+Decrypted message: {word_match}
 ------------+------------""")
 
-# print("Key found:", k)
-# print("Decrypted message:", decrypt(encrypted, k))
