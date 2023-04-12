@@ -4,10 +4,11 @@ import queue
 import select
 import socket
 import threading
+from time import time
 from enum import Enum
 from copy import deepcopy
-from itertools import cycle
 from struct import pack, unpack
+from itertools import cycle, count
 from io import StringIO
 from contextlib import redirect_stdout
 
@@ -130,8 +131,7 @@ class ClusterVisitor(ast.NodeVisitor):
     def __init__(self):
         self.names = {"parameters": "params", "mediator_class": "Mediator",
                       "mediator_object": "cluster", "processing_request": "send_request",
-                      "template_change": "template_change", "await": "get_results",
-                      "client_file": "shared.txt"}
+                      "template_change": "template_change", "await": "get_results"}
         self.module_node = None
 
         self.current_func = self.Function.empty_instance()
@@ -631,7 +631,7 @@ class ClusterModifier(ast.NodeTransformer):
 
         self.templates_count += 1
 
-    def provide_response(self):
+    def create_templates(self):
         for loop in self.visitor.loops:
             if loop.is_nested:
                 self.generic_visit(loop.node)
@@ -643,8 +643,8 @@ class ClusterModifier(ast.NodeTransformer):
 
     def clear_data(self):
         self.current_params.clear()
-        self.global_nodes = []
-        self.instructions = []
+        self.all_params.clear()
+        self.instructions = None
 
 
 class ObjectType(Enum):
@@ -669,6 +669,199 @@ class ClusterServer:
     #  6      |  return response
     #  7      |  initiate connection
 
+    RUN_START_TIME = None
+
+    class Actions(Enum):
+        RESERVED = 0
+        PROCESSING_REQUEST = 1
+        PROCESSING_RESPONSE = 2
+        GET_RESULTS_REQUEST = 3
+        NODE_AVAILABLE = 4
+        SEND_TASK_TO_NODE = 5
+        TASK_RESPONSE = 6
+        CONNECT_AS_MEDIATOR = 7
+        CONNECT_AS_NODE = 8
+        CONNECT_AS_USER = 9
+        UNDEFINED_CODE = 10
+
+    class ConnectionStatus(Enum):
+        USER = "User"
+        NODE = "Node"
+        Mediator = "Mediator"
+        UNDEFINED = "None"
+
+    class CustomSocket:
+        _ids = count()
+        _all_templates = queue.Queue()
+
+        def __init__(self, sock):
+            self.id = next(self._ids)
+            self.task_id = count()
+            ip, port = sock.getsockname()
+            self.sock = sock
+            self.port = port
+            self.ip = ip
+            self.lock = threading.Lock()
+            self.initial_connection = time()
+            self.time_stamps = list()
+            self.connection_type = ClusterServer.ConnectionStatus.UNDEFINED
+
+            # If connection_type is Node
+            self.hash_to_sock = dict()
+            self.ongoing_tasks = dict()
+            self.executed_tasks = dict()
+            self.available_threads = 0
+
+            # If connection_type is Mediator
+            self.templates = dict()
+            self.results = dict()
+            self.get_results = False
+            self.result_id = 0
+            self.task_queue = queue.Queue()
+
+            # If connection_type is User
+            self.temp = None
+
+            logger.info(f"[CONNECTION ESTABLISHED] connection has been established from {ip}, {port}")
+
+        def __hash__(self):
+            return self.id
+
+        def __eq__(self, other):
+            if isinstance(other, self.__class__):
+                return self.id == other.id
+            return False
+
+        def __enter__(self):
+            self.lock.acquire()
+
+            return self.sock
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            self.lock.release()
+
+        def set_connection_type(self, connection_type):
+            def clear_user_data():
+                pass
+
+            def clear_node_data():
+                self.hash_to_sock.clear()
+                self.ongoing_tasks.clear()
+                self.executed_tasks.clear()
+                self.available_threads = 0
+
+            def clear_mediator_data():
+                self.templates.clear()
+                self.results.clear()
+                self.get_results = False
+                self.result_id = 0
+                with self.task_queue.mutex:
+                    self.task_queue.queue.clear()
+
+            if connection_type == ClusterServer.Actions.CONNECT_AS_MEDIATOR:
+                clear_node_data()
+                clear_user_data()
+                self.templates = self._all_templates.get()
+                self.results = {i: {} for i in range(len(self.templates))}
+            elif connection_type == ClusterServer.Actions.CONNECT_AS_NODE:
+                clear_mediator_data()
+                clear_user_data()
+            elif connection_type == ClusterServer.Actions.CONNECT_AS_USER:
+                clear_mediator_data()
+                clear_node_data()
+            else:
+                logger.error(
+                    f"[CONNECTION DENIED] connection must be of type {ClusterServer.ConnectionStatus.NODE.value}, "
+                    f"{ClusterServer.ConnectionStatus.USER.value} or {ClusterServer.ConnectionStatus.Mediator.value} "
+                    f"when initialized")
+                return
+
+            self.connection_type = connection_type
+
+        def time_stamp_action(self, action):
+            self.time_stamps.append((time(), action))
+
+        def handle_user_input(self, file_name="Examples/CaesarCipher.py"):
+            file = file_name
+            modified_file = "Modified.py"
+            byproduct_file = "Created.py"
+            with open(file) as source:
+                ast_tree = ast.parse(source.read())
+
+            visitor = ClusterVisitor()
+            visitor.visit(ast_tree)
+            modifier = ClusterModifier(visitor)
+            modifier.create_templates()
+            templates = modifier.templates
+
+            if templates:
+                logger.warning(f"File {file} is breakable")
+                self.templates = templates
+                self._all_templates.put(templates)
+
+                modified_code = ast.unparse(ast_tree)
+                with open(modified_file, 'w') as output_file:
+                    output_file.write(modified_code)
+                modified_code = ast.parse(modified_code)
+                exec_byproduct = threading.Thread(target=exec_tree, args=(modified_code, ))
+                exec_byproduct.start()
+            else:
+                logger.warning(f"File {file} is unbreakable")
+
+        def add_request(self, template_id, params):
+            self.task_queue.put((template_id, params))
+
+        def get_request(self):
+            if self.task_queue.empty():
+                return None
+            return self.task_queue.get()
+
+        def add_task(self, user_sock, params):
+            new_id = next(self.task_id)
+            self.ongoing_tasks[new_id] = params
+            self.hash_to_sock[new_id] = user_sock
+            return new_id
+
+        def get_task(self, template_id, params):
+            task = self.templates[template_id]
+            task.params = params
+            return task.to_executable()
+
+        def get_result(self):
+            result_id, current_result = self.result_id, self.results[self.result_id]
+            self.result_id += 1
+            return result_id, current_result
+
+        def update_result(self, original, params):
+            new = {p: params[p] for p in original if p in params and not original[p] == params[p]}
+            if new:
+                response = self.results[self.result_id]
+                if not response:
+                    response.update(new)
+                else:
+                    for key in response.keys():
+                        org_value, new_value = original[key], new[key]
+                        if not type(org_value) == type(new_value):
+                            response[key] = new[key]
+                        else:
+                            if isinstance(org_value, list):
+                                for i in range(len(new_value)):
+                                    if org_value[i] != new_value[i]:
+                                        response[key][i] = new_value[i]
+                                else:
+                                    org_value.extend(new_value[i:])
+                            elif isinstance(org_value, dict):
+                                key_names = org_value.keys()
+                                for k in new_value.keys():
+                                    if k in key_names:
+                                        if org_value[k] != new_value[k]:
+                                            response[key][k] = new_value[k]
+                                    else:
+                                        response[key][k] = new_value[k]
+
+        def node_failure(self):
+            pass
+
     def __init__(self, port=55555, send_format="utf-8", buffer_size=1024, max_queue=5):
         self.ip = "0.0.0.0"
         self.port = port
@@ -678,25 +871,22 @@ class ClusterServer:
         self.max_queue = max_queue
         self.main_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
-        self.client_sock = None
+        self.user_task_queue = queue.Queue()
+        self.user_result_queue = queue.Queue()
+        self.node_queue = queue.Queue()
+        self.all_socks = dict()
         self.read_socks = list()
         self.write_socks = list()
-        self.templates = list()
-        self.node_queue = queue.Queue()
-        self.task_queue = queue.Queue()
-        self.result_queue = queue.Queue()
 
         self.task_condition = threading.Condition()
         self.result_condition = threading.Condition()
         self.lock = threading.Lock()
-        self.requests = dict()
-        self.responses = dict()
-        self.current_result_id = 0
-        self.close_connections = False
 
+        self.close_connections = False
+        self.RUN_START_TIME = time()
         self.init_connection()
 
-    def set_partition(self, cluster_trees):
+    def set_templates(self, cluster_trees):
         self.templates = cluster_trees
 
     def init_connection(self):
@@ -704,97 +894,120 @@ class ClusterServer:
         self.main_sock.listen(self.max_queue)
         self.read_socks = [self.main_sock]
         self.write_socks = []
+        connection_handler = threading.Thread(target=self.handle_connection)
         request_handler = threading.Thread(target=self.handle_tasks)
         response_handler = threading.Thread(target=self.handle_results)
-        request_handler.start()
+        connection_handler.start()
         response_handler.start()
+        request_handler.start()
 
     def handle_connection(self):
+        actions = self.Actions
         while not self.close_connections:
             readable, writeable, exceptions = select.select(self.read_socks, self.write_socks, self.read_socks)
             for sock in readable:
                 if sock is self.main_sock:
                     connection, client_addr = sock.accept()
-                    ip, port = client_addr
-                    logger.info(f"[CONNECTION ESTABLISHED] connection has been established from {ip}, {port}")
-                    logger.info(f"[ACTIVE CONNECTIONS] {len(self.read_socks)} active connection(s)")
                     self.read_socks.append(connection)
                 else:
-                    packet = self.recv_msg(sock)
-                    if packet:
-                        msg_fmt = None
+                    with self.lock:
+                        custom_sock = self.all_socks.get(sock)
+                        if not custom_sock:
+                            custom_sock = self.CustomSocket(sock)
+                            self.all_socks[sock] = custom_sock
+                    packet = self.recv_msg(custom_sock)
+                    if not packet:
+                        self.close_sock(custom_sock)
+                    else:
                         if sock not in self.write_socks:
                             self.write_socks.append(sock)
-                        op_code, reserved, data = packet
-                        if op_code == 1:
-                            template_id = reserved
-                            self.task_queue.put((template_id, data))
-                            with self.lock:
-                                self.responses[template_id] = dict()
-                            msg_fmt = f"processing request (id={template_id})"
-                        elif op_code == 3:
-                            task_group_id = reserved
-                            logger.info(f"[DATA RECEIVED] get results request (id={task_group_id})")
-                        elif op_code == 4:
+                        sock = custom_sock
+                        action, optional, reserved, data = packet
+                        if action == actions.UNDEFINED_CODE:
+                            continue
+                        if action == actions.PROCESSING_REQUEST:
+                            template_id = optional
+                            sock.add_request(template_id, data)
+                            self.user_task_queue.put(sock)
+                            with self.task_condition:
+                                self.task_condition.notify()
+                        elif action == actions.GET_RESULTS_REQUEST:
+                            with sock:
+                                sock.get_results = True
+                            self.user_task_queue.put(sock)
+                        elif action == actions.NODE_AVAILABLE:
                             self.node_queue.put(sock)
                             with self.task_condition:
                                 self.task_condition.notify()
-                            ip, port = sock.getsockname()
-                            logger.info(f"[TASK FINISHED] {ip} executed {data} task(s)")
-                            logger.info(f"[TASK FINISHED] {ip} is currently available")
-                        elif op_code == 6:
-                            task_id = reserved
-                            msg_fmt = f"process result (id={task_id})"
-                            with self.lock:
-                                original = self.requests[sock]
-                            new = {p: data[p] for p in original if p in data and not original[p] == data[p]}
-                            if new:
-                                with self.lock:
-                                    response = self.responses[task_id]
-                                    if response:
-                                        for key in response.keys():
-                                            org_value, new_value = original[key], new[key]
-                                            if type(org_value) == type(new_value):
-                                                if isinstance(org_value, list):
-                                                    for i in range(len(new_value)):
-                                                        if org_value[i] != new_value[i]:
-                                                            response[key][i] = new_value[i]
-                                                    else:
-                                                        org_value.extend(new_value[i:])
-                                                elif isinstance(org_value, dict):
-                                                    for k in new_value.keys():
-                                                        if org_value.get(k) != new_value.get(k):
-                                                            response[key][k] = new_value[k]
-                                            else:
-                                                response[key] = new[key]
-                                    else:
-                                        response.update(new)
-                        elif op_code == 7:
-                            self.client_sock = sock
-                            ip, port = sock.getsockname()
-                            logger.info(f"[NEW CLIENT CONNECTION] {ip} connected as a client")
-                        if msg_fmt:
-                            logger.info(f"[DATA RECEIVED] {msg_fmt}: {data}")
-                    else:
-                        self.close_sock(sock)
+                        elif action == actions.TASK_RESPONSE:
+                            task_id, params = reserved, data
+                            with sock:
+                                original = sock.ongoing_tasks.pop(task_id)
+                                sock.executed_tasks[task_id] = original
+                                user_sock = sock.hash_to_sock[task_id]
+                            with user_sock:
+                                user_sock.update_result(original, params)
+                        elif action == actions.CONNECT_AS_MEDIATOR or action == actions.CONNECT_AS_NODE \
+                                or action == actions.CONNECT_AS_USER:
+                            with sock:
+                                sock.set_connection_type(action)
+                                if action == actions.CONNECT_AS_USER:
+                                    sock.handle_user_input()
 
             for sock in exceptions:
+                sock = self.all_socks[sock]
                 self.close_sock(sock)
         for sock in self.read_socks:
+            sock = self.all_socks[sock]
             self.close_sock(sock)
 
-    def send_msg(self, sock, op_code, msg, reserved=0):
+    def send_msg(self, sock, action, msg=None, optional=0, reserved=0):
         pickled_msg = pickle.dumps(msg)
-        pickled_msg = pack('>III', len(pickled_msg), op_code, reserved) + pickled_msg
-        sock.sendall(pickled_msg)
+        op_code = action.value
+        pickled_msg = pack('>4I', len(pickled_msg), op_code, optional, reserved) + pickled_msg
+
+        with sock as socket_object:
+            sock.time_stamp_action(action)
+            socket_object.sendall(pickled_msg)
 
     def recv_msg(self, sock):
-        raw_header = self.recv_limited_bytes(sock, 12)
-        if not raw_header:
-            return None
-        msg_len, op_code, reserved = unpack('>III', raw_header)
-        pickled_msg = self.recv_limited_bytes(sock, msg_len)
-        return op_code, reserved, pickle.loads(pickled_msg)
+        with sock as socket_object:
+            raw_header = self.recv_limited_bytes(socket_object, 16)
+            if not raw_header:
+                return None
+            msg_len, op_code, optional, reserved = unpack('>4I', raw_header)
+            pickled_msg = self.recv_limited_bytes(socket_object, msg_len)
+            msg = pickle.loads(pickled_msg)
+
+            actions = self.Actions
+            action = actions.UNDEFINED_CODE
+            if 0 < op_code < 10:
+                msg_fmt = None
+                action = actions(op_code)
+                if action == actions.PROCESSING_REQUEST:
+                    template_id = optional
+                    msg_fmt = f"processing request (id={template_id})"
+                elif action == actions.GET_RESULTS_REQUEST:
+                    task_group_id = optional
+                    logger.info(f"[DATA RECEIVED] get results request (id={task_group_id})")
+                elif action == actions.NODE_AVAILABLE:
+                    logger.info(f"[NODE AVAILABLE] {sock.ip} executed {len(sock.executed_tasks)} task(s)")
+                    logger.info(f"[NODE AVAILABLE] {sock.ip} has {msg} threads available")
+                elif action == actions.TASK_RESPONSE:
+                    task_id = optional
+                    msg_fmt = f"process result (id={task_id})"
+                elif action == actions.CONNECT_AS_MEDIATOR:
+                    logger.info(f"[NEW USER CONNECTION] {sock.ip} connected as a mediator")
+                elif action == actions.CONNECT_AS_USER:
+                    logger.info(f"[NEW USER CONNECTION] {sock.ip} connected as a user")
+                elif action == actions.CONNECT_AS_NODE:
+                    logger.info(f"[NEW NODE CONNECTION] {sock.ip} connected as a node")
+                if msg_fmt:
+                    logger.info(f"[DATA RECEIVED] {msg_fmt}: {msg}")
+
+            sock.time_stamp_action(action)
+
+        return action, optional, reserved, msg
 
     def recv_limited_bytes(self, sock, n):
         data = bytearray()
@@ -806,62 +1019,55 @@ class ClusterServer:
         return data
 
     def handle_tasks(self):
-        op_code = 5
         while True:
-            if self.task_queue.empty():
-                with self.lock:
-                    response = self.responses.get(self.current_result_id)
-                if response:
-                    self.result_queue.put(response)
-                    with self.task_condition:
-                        self.task_condition.wait()
-                    with self.result_condition:
-                        self.result_condition.notify()
-                with self.task_condition:
-                    self.task_condition.wait()
-            elif self.node_queue.empty():
+            if self.user_task_queue.empty() or self.node_queue.empty():
                 with self.task_condition:
                     self.task_condition.wait()
             else:
-                sock = self.node_queue.get()
-                if sock in self.write_socks:
-                    data = self.task_queue.get()
-                    if not data:
-                        self.node_queue.put(sock)
-                        break
-                    template_id, params = data
-
-                    # Release a result
-                    if self.current_result_id < template_id:
-                        with self.lock:
-                            response = self.responses[self.current_result_id]
-                        self.result_queue.put(response)
+                node_sock = self.node_queue.get()
+                with node_sock as sock_object:
+                    if sock_object not in self.write_socks:
+                        continue
+                user_sock = self.user_task_queue.get()
+                with user_sock:
+                    if user_sock.get_results and user_sock.task_queue.empty():
+                        self.user_result_queue.put(user_sock)
                         with self.result_condition:
                             self.result_condition.notify()
-
-                    task = self.templates[template_id]
-                    task.params = params
-                    self.send_msg(sock, op_code, task.to_executable(), template_id)
-                    with self.lock:
-                        self.requests[sock] = params
+                        continue
+                    data = user_sock.get_request()
+                if not data:
+                    self.node_queue.put(node_sock)
+                    logger.error(f"[ERROR ENCOUNTERED] expected a task on {user_sock.ip} but none were found")
+                    continue
+                template_id, params = data
+                task = user_sock.get_task(template_id, params)
+                task_id = node_sock.add_task(user_sock, params)
+                self.send_msg(node_sock, self.Actions.SEND_TASK_TO_NODE, task, template_id, task_id)
 
     def handle_results(self):
-        op_code = 2
         while True:
             with self.result_condition:
                 self.result_condition.wait()
-            response = self.result_queue.get()
-            self.send_msg(self.client_sock, op_code, response)
-            logger.info(f"[RESPONSE SENT] response parameters (id={self.current_result_id}): {response}")
-            self.current_result_id += 1
+            if self.user_result_queue.empty():
+                continue
+            user_sock = self.user_result_queue.get()
+            with user_sock:
+                result_id, result = user_sock.get_result()
+            self.send_msg(user_sock, self.Actions.PROCESSING_RESPONSE, result)
+            logger.info(f"[RESPONSE SENT] response parameters (id={result_id}): {result}")
 
     def close_sock(self, sock):
-        if sock in self.write_socks:
-            self.write_socks.remove(sock)
-        self.read_socks.remove(sock)
-        ip, port = sock.getsockname()
-        sock.close()
-        logger.info(f"[CONNECTION CLOSED] connection from {ip}, {port} has been closed")
+        with self.lock:
+            if sock in self.all_socks:
+                del self.all_socks[sock]
+        with sock as socket_object:
+            if socket_object in self.write_socks:
+                self.write_socks.remove(socket_object)
+            self.read_socks.remove(socket_object)
+            socket_object.close()
+            sock.node_failure()
+        logger.info(f"[CONNECTION CLOSED] connection from {sock.ip}, {sock.port} had been closed")
 
 
 class TaskMaker:
@@ -952,37 +1158,4 @@ if __name__ == '__main__':
     file_handler.setFormatter(logging.Formatter(*fmt))
     logger.addHandler(file_handler)
 
-    file = "Examples/CaesarCipher.py"
-    modified_file = "Modified.py"
-    byproduct_file = "Created.py"
-    with open(file) as source:
-        ast_tree = ast.parse(source.read())
-
-    Visitor = ClusterVisitor()
-    Visitor.visit(ast_tree)
-
-    logger.debug(f"Loops {[str(loop) for loop in Visitor.loops]}")
-    logger.debug(f"Functions {[str(value) for value in Visitor.functions.values()]}")
-    logger.debug(f"Threads {[str(thread) for thread in Visitor.threads]}")
-    logger.debug(f"Parameters {Visitor.parameters}")
-
-    Modifier = ClusterModifier(Visitor)
-    Modifier.provide_response()
-    cluster_partitions = Modifier.templates
-
-    logger.debug(f"Templates {cluster_partitions}")
-
-    if cluster_partitions:
-        logger.warning(f"File {file} is breakable")
-
-        server = ClusterServer()
-        server.set_partition(cluster_partitions)
-        server_thread = threading.Thread(target=server.handle_connection)
-        server_thread.start()
-
-        modified_code = ast.unparse(ast_tree)
-        with open(modified_file, 'w') as output_file:
-            output_file.write(modified_code)
-        exec_tree(ast.parse(modified_code))
-    else:
-        logger.warning(f"File {file} is unbreakable")
+    server = ClusterServer()

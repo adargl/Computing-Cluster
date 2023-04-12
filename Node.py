@@ -1,6 +1,7 @@
 import pickle
 import socket
 from struct import pack, unpack
+from Client import BaseClient
 
 import logging
 
@@ -44,20 +45,16 @@ class ExecutableTree:
         exec(compile(self.tree, file_name, 'exec'), {self.params_name: self.params})
 
 
-class Node:
-    def __init__(self, server_ip, server_port=55555, send_format="utf-8", buffer_size=1024):
+class Node(BaseClient):
+    def __init__(self, server_ip, max_threads=2, server_port=55555, send_format="utf-8", buffer_size=1024):
+        super().__init__(server_port, send_format, buffer_size)
         self.server_ip = server_ip
-        self.server_port = server_port
-        self.server_addr = (self.server_ip, self.server_port)
-        self.format = send_format
-        self.buffer = buffer_size
-        self.conn_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
-        self.executed_count = 0
+        self.max_threads = max_threads
         self.params = None
 
     def init_connection(self):
-        self.conn_sock.connect(self.server_addr)
+        super().init_connection()
+        self.connect_as_node()
         self.handle_connection()
 
     def handle_connection(self):
@@ -65,48 +62,27 @@ class Node:
         while True:
             packet = self.recv_msg(self.conn_sock)
             if packet:
-                op_code, task_id, executable_tree = packet
-                if op_code == 5:
+                action, template_id, task_id, executable_tree = packet
+                if action == self.Actions.SEND_TASK_TO_NODE:
                     self.params = executable_tree.params
-                    logger.info(f"[DATA RECEIVED] request  (id={task_id}): {executable_tree.params}")
+                    logger.info(f"[DATA RECEIVED] request  (id={template_id}): {executable_tree.params}")
                     executable_tree.exec_tree()
-                    self.executed_count += 1
-                    self.send_response(task_id)
+                    self.send_response(template_id, task_id)
                     self.declare_ready()
             else:
                 self.conn_sock.close()
                 break
 
-    def send_msg(self, sock, op_code, msg, reserved=0):
-        pickled_msg = pickle.dumps(msg)
-        pickled_msg = pack('>III', len(pickled_msg), op_code, reserved) + pickled_msg
-        sock.sendall(pickled_msg)
-
-    def recv_msg(self, sock):
-        raw_header = self.recv_limited_bytes(sock, 12)
-        if not raw_header:
-            return None
-        msg_len, op_code, reserved = unpack('>III', raw_header)
-        pickled_msg = self.recv_limited_bytes(sock, msg_len)
-        return op_code, reserved, pickle.loads(pickled_msg)
-
-    def recv_limited_bytes(self, sock, n):
-        data = bytearray()
-        while len(data) < n:
-            packet = sock.recv(n - len(data))
-            if not packet:
-                return None
-            data.extend(packet)
-        return data
-
     def declare_ready(self):
-        op_code = 4
-        self.send_msg(self.conn_sock, op_code, self.executed_count)
+        self.send_msg(self.conn_sock, self.Actions.NODE_AVAILABLE, self.max_threads)
 
-    def send_response(self, task_id):
-        op_code = 6
-        self.send_msg(self.conn_sock, op_code, self.params, task_id)
-        logger.info(f"[RESPONSE SENT] response (id={task_id}): {self.params}")
+    def send_response(self, template_id, task_id):
+        self.send_msg(self.conn_sock, self.Actions.TASK_RESPONSE, self.params, template_id, task_id)
+        logger.info(f"[RESPONSE SENT] response (id={template_id}): {self.params}")
+
+    def connect_as_node(self):
+        super().connect_as_node()
+        logger.info(f"[CONNECTION REQUEST] request sent to connect as a node")
 
 
 if __name__ == '__main__':
@@ -121,11 +97,6 @@ if __name__ == '__main__':
     stream_handler.setLevel(logger.level)
     stream_handler.setFormatter(CustomFormatter(*fmt))
     logger.addHandler(stream_handler)
-
-    file_handler = logging.FileHandler(logging_file)
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(logging.Formatter(*fmt))
-    logger.addHandler(file_handler)
 
     client = Node("localhost")
     client.init_connection()

@@ -1,21 +1,20 @@
 from random import randint
 
-def merge_sort(array):
-    # Make a copy of the array to avoid modifying the original
-    array = array[:]
 
-    # Start with a list of one-element lists
+def merge_sort(array):
+    array = array.copy()
     subarrays = [[x] for x in array]
 
     # While there is more than one subarray, merge pairs of adjacent subarrays
     while len(subarrays) > 1:
-        # Initialize the list of merged subarrays
         merged = []
-        # Iterate over pairs of adjacent subarrays
         for i in range(0, len(subarrays), 2):
-            # Merge the subarrays
-            merged.append(merge(subarrays[i], subarrays[i + 1]))
-        # Replace the list of subarrays with the list of merged subarrays
+            # Merge the subarrays if there are two
+            if i + 1 < len(subarrays):
+                merged.append(merge(subarrays[i], subarrays[i + 1]))
+            # Append the leftover subarray
+            else:
+                merged.append(subarrays[i])
         subarrays = merged
 
     # Return the only remaining subarray
@@ -23,11 +22,9 @@ def merge_sort(array):
 
 
 def merge(left, right):
-    # Initialize the merged list
     merged = []
-    # Initialize indices for the left and right subarrays
     i = j = 0
-    # Iterate over the elements of the subarrays
+
     while i < len(left) and j < len(right):
         # If the element from the left subarray is smaller, append it to the merged list
         if left[i] < right[j]:
@@ -37,14 +34,13 @@ def merge(left, right):
         else:
             merged.append(right[j])
             j += 1
-    # Append the remaining elements of the left subarray, if any
+
     merged.extend(left[i:])
-    # Append the remaining elements of the right subarray, if any
     merged.extend(right[j:])
-    # Return the merged list
+
     return merged
 
 
 # Test the merge_sort function
-array = list(map(lambda x: randint(1, 100), range(100)))
-print(merge_sort(array))
+lst = list(map(lambda x: randint(1, 100), range(100)))
+print(merge_sort(lst))

@@ -13,7 +13,7 @@ class CustomFormatter(logging.Formatter):
     bright_grey = "\x1b[38;5;250m"
     yellow = '\x1b[38;5;136m'
     red = '\x1b[31;20m'
-    bold_red = '\x1b[31;1m'
+    green = '\x1b[38;5;64m'
     reset = '\x1b[0m'
 
     def __init__(self, level_fmt, time_fmt):
@@ -25,7 +25,7 @@ class CustomFormatter(logging.Formatter):
             logging.INFO: self.dark_grey + self.level_fmt + self.reset,
             logging.WARNING: self.yellow + self.level_fmt + self.reset,
             logging.ERROR: self.red + self.level_fmt + self.reset,
-            logging.CRITICAL: self.bold_red + self.level_fmt + self.reset
+            logging.CRITICAL: self.green + self.level_fmt + self.reset
         }
 
     def format(self, record):
@@ -34,33 +34,35 @@ class CustomFormatter(logging.Formatter):
         return formatter.format(record)
 
 
-class Mediator(BaseClient):
-    def __init__(self, server_port=55555, send_format="utf-8", buffer_size=1024):
+class User(BaseClient):
+    def __init__(self, server_ip, server_port=55555, send_format="utf-8", buffer_size=1024):
         super().__init__(server_port, send_format, buffer_size)
-        self.init_connection()
+        self.server_ip = server_ip
 
     def init_connection(self):
         super().init_connection()
-        self.connect_as_mediator()
+        self.connect_as_user()
 
-    def send_request(self, template_id, params):
-        self.send_msg(self.conn_sock, self.Actions.PROCESSING_REQUEST, params, template_id)
+    def send_input_file(self):
+        pass
 
-    def get_results(self, task_id):
-        self.send_msg(self.conn_sock, self.Actions.GET_RESULTS_REQUEST, None, task_id)
-        action, optional, reserved, response = self.recv_msg(self.conn_sock)
-        return response
-
-    def connect_as_mediator(self):
-        super().connect_as_mediator()
-        logger.info(f"[CONNECTION REQUEST] request sent to connect as a mediator")
+    def connect_as_user(self):
+        super().connect_as_user()
+        logger.info(f"[CONNECTION REQUEST] request sent to connect as a user")
 
 
-fmt = '%(name)s %(asctime)s.%(msecs)03d %(message)s', '%I:%M:%S'
+if __name__ == '__main__':
+    logging_file = 'Server.log'
+    fmt = '%(name)s %(asctime)s.%(msecs)03d %(message)s', '%I:%M:%S'
+    with open(logging_file, 'w'):
+        pass
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-stream_handler = logging.StreamHandler()
-stream_handler.setLevel(logger.level)
-stream_handler.setFormatter(CustomFormatter(*fmt))
-logger.addHandler(stream_handler)
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.INFO)
+    stream_handler = logging.StreamHandler()
+    stream_handler.setLevel(logger.level)
+    stream_handler.setFormatter(CustomFormatter(*fmt))
+    logger.addHandler(stream_handler)
+
+    client = User("localhost")
+    client.init_connection()
