@@ -4,9 +4,9 @@ import queue
 import select
 import socket
 import threading
-from time import time
 from enum import Enum
 from copy import deepcopy
+from time import time, perf_counter
 from struct import pack, unpack
 from itertools import cycle, count
 from io import StringIO
@@ -710,6 +710,7 @@ class ClusterServer:
             self.hash_to_sock = dict()
             self.ongoing_tasks = dict()
             self.executed_tasks = dict()
+            self.unhandled_requests = 0
             self.available_threads = 0
 
             # If connection_type is Mediator
@@ -803,8 +804,8 @@ class ClusterServer:
                 with open(modified_file, 'w') as output_file:
                     output_file.write(modified_code)
                 modified_code = ast.parse(modified_code)
-                exec_byproduct = threading.Thread(target=exec_tree, args=(modified_code, ))
-                exec_byproduct.start()
+                exec_tree(modified_code)
+                pass
             else:
                 logger.warning(f"File {file} is unbreakable")
 
@@ -934,7 +935,6 @@ class ClusterServer:
                         elif action == actions.GET_RESULTS_REQUEST:
                             with sock:
                                 sock.get_results = True
-                            self.user_task_queue.put(sock)
                         elif action == actions.NODE_AVAILABLE:
                             self.node_queue.put(sock)
                             with self.task_condition:
@@ -947,12 +947,19 @@ class ClusterServer:
                                 user_sock = sock.hash_to_sock[task_id]
                             with user_sock:
                                 user_sock.update_result(original, params)
+                                user_sock.unhandled_requests -= 1
+                                if user_sock.get_results and user_sock.task_queue.empty() \
+                                        and user_sock.unhandled_requests == 0:
+                                    self.user_result_queue.put(user_sock)
+                                    with self.result_condition:
+                                        self.result_condition.notify()
                         elif action == actions.CONNECT_AS_MEDIATOR or action == actions.CONNECT_AS_NODE \
                                 or action == actions.CONNECT_AS_USER:
                             with sock:
                                 sock.set_connection_type(action)
                                 if action == actions.CONNECT_AS_USER:
-                                    sock.handle_user_input()
+                                    handler = threading.Thread(target=sock.handle_user_input)
+                                    handler.start()
 
             for sock in exceptions:
                 sock = self.all_socks[sock]
@@ -992,7 +999,7 @@ class ClusterServer:
                     logger.info(f"[DATA RECEIVED] get results request (id={task_group_id})")
                 elif action == actions.NODE_AVAILABLE:
                     logger.info(f"[NODE AVAILABLE] {sock.ip} executed {len(sock.executed_tasks)} task(s)")
-                    logger.info(f"[NODE AVAILABLE] {sock.ip} has {msg} threads available")
+                    logger.info(f"[NODE AVAILABLE] {sock.ip} can have {msg} threads available")
                 elif action == actions.TASK_RESPONSE:
                     task_id = optional
                     msg_fmt = f"process result (id={task_id})"
@@ -1030,11 +1037,6 @@ class ClusterServer:
                         continue
                 user_sock = self.user_task_queue.get()
                 with user_sock:
-                    if user_sock.get_results and user_sock.task_queue.empty():
-                        self.user_result_queue.put(user_sock)
-                        with self.result_condition:
-                            self.result_condition.notify()
-                        continue
                     data = user_sock.get_request()
                 if not data:
                     self.node_queue.put(node_sock)
@@ -1044,6 +1046,8 @@ class ClusterServer:
                 task = user_sock.get_task(template_id, params)
                 task_id = node_sock.add_task(user_sock, params)
                 self.send_msg(node_sock, self.Actions.SEND_TASK_TO_NODE, task, template_id, task_id)
+                with user_sock:
+                    user_sock.unhandled_requests += 1
 
     def handle_results(self):
         while True:
@@ -1133,11 +1137,16 @@ def has_body(ast_node):
 
 
 def exec_tree(tree, file_name=''):
+    start_time = perf_counter()
     std_out = StringIO()
     with redirect_stdout(std_out):
         exec(compile(tree, file_name, 'exec'), {'builtins': globals()['__builtins__']})
+    finish_time = perf_counter()
+
     # Remove the last char from the output since it is always '\n'
-    logger.critical("[EXECUTION FINISHED] Program output:\n" + std_out.getvalue()[:-1])
+    output = std_out.getvalue()[:-1]
+    logger.critical(f"[EXECUTION FINISHED] Program output:\n{'-' * 10}Final{'-' * 10}\n" + output
+                    + f"\n{'-' * 12}+{'-' * 12}\nfinished in {finish_time - start_time} second(s)")
 
 
 if __name__ == '__main__':

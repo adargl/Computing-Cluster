@@ -1,5 +1,7 @@
 import pickle
 import socket
+import concurrent.futures
+from threading import Semaphore
 from struct import pack, unpack
 from Client import BaseClient
 
@@ -46,11 +48,11 @@ class ExecutableTree:
 
 
 class Node(BaseClient):
-    def __init__(self, server_ip, max_threads=2, server_port=55555, send_format="utf-8", buffer_size=1024):
+    def __init__(self, server_ip, max_threads=1, server_port=55555, send_format="utf-8", buffer_size=1024):
         super().__init__(server_port, send_format, buffer_size)
         self.server_ip = server_ip
         self.max_threads = max_threads
-        self.params = None
+        self.semaphore = Semaphore(max_threads)
 
     def init_connection(self):
         super().init_connection()
@@ -58,27 +60,34 @@ class Node(BaseClient):
         self.handle_connection()
 
     def handle_connection(self):
-        self.declare_ready()
-        while True:
-            packet = self.recv_msg(self.conn_sock)
-            if packet:
-                action, template_id, task_id, executable_tree = packet
-                if action == self.Actions.SEND_TASK_TO_NODE:
-                    self.params = executable_tree.params
-                    logger.info(f"[DATA RECEIVED] request  (id={template_id}): {executable_tree.params}")
-                    executable_tree.exec_tree()
-                    self.send_response(template_id, task_id)
-                    self.declare_ready()
-            else:
-                self.conn_sock.close()
-                break
+        for _ in range(self.max_threads):
+            self.declare_ready()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_threads) as executor:
+            while True:
+                packet = self.recv_msg(self.conn_sock)
+                if packet:
+                    action, template_id, task_id, executable_tree = packet
+                    if action == self.Actions.SEND_TASK_TO_NODE:
+                        executor.submit(self.execute_task, executable_tree, template_id, task_id)
+                else:
+                    self.conn_sock.close()
+                    executor.shutdown(wait=False)
+                    break
+
+    def execute_task(self, executable_tree, template_id, task_id):
+        with self.semaphore:
+            params = executable_tree.params
+            logger.info(f"[DATA RECEIVED] request  (id={template_id}): {params}")
+            executable_tree.exec_tree()
+            self.send_response(template_id, task_id, params)
+            self.declare_ready()
 
     def declare_ready(self):
         self.send_msg(self.conn_sock, self.Actions.NODE_AVAILABLE, self.max_threads)
 
-    def send_response(self, template_id, task_id):
-        self.send_msg(self.conn_sock, self.Actions.TASK_RESPONSE, self.params, template_id, task_id)
-        logger.info(f"[RESPONSE SENT] response (id={template_id}): {self.params}")
+    def send_response(self, template_id, task_id, params):
+        self.send_msg(self.conn_sock, self.Actions.TASK_RESPONSE, params, template_id, task_id)
+        logger.info(f"[RESPONSE SENT] response (id={template_id}): {params}")
 
     def connect_as_node(self):
         super().connect_as_node()
@@ -98,5 +107,5 @@ if __name__ == '__main__':
     stream_handler.setFormatter(CustomFormatter(*fmt))
     logger.addHandler(stream_handler)
 
-    client = Node("localhost")
+    client = Node("localhost", 8)
     client.init_connection()

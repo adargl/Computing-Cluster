@@ -64,9 +64,6 @@ encrypted = encrypt(msg, 21)
 lang = "en_US"
 key, word_match = find_best_word(encrypted, lang)
 
-print(
-    f"""----------Final----------
-Key found: {key}
-Decrypted message: {word_match}
-------------+------------""")
+print(f"""Key found: {key}
+Decrypted message: {word_match}""")
 
