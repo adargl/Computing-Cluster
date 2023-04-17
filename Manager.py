@@ -682,7 +682,8 @@ class ClusterServer:
         CONNECT_AS_MEDIATOR = 7
         CONNECT_AS_NODE = 8
         CONNECT_AS_USER = 9
-        UNDEFINED_CODE = 10
+        USER_INPUT_FILE = 10
+        UNDEFINED_CODE = 11
 
     class ConnectionStatus(Enum):
         USER = "User"
@@ -887,9 +888,6 @@ class ClusterServer:
         self.RUN_START_TIME = time()
         self.init_connection()
 
-    def set_templates(self, cluster_trees):
-        self.templates = cluster_trees
-
     def init_connection(self):
         self.main_sock.bind(self.addr)
         self.main_sock.listen(self.max_queue)
@@ -957,9 +955,11 @@ class ClusterServer:
                                 or action == actions.CONNECT_AS_USER:
                             with sock:
                                 sock.set_connection_type(action)
-                                if action == actions.CONNECT_AS_USER:
-                                    handler = threading.Thread(target=sock.handle_user_input)
-                                    handler.start()
+                        elif action == actions.USER_INPUT_FILE:
+                            with sock:
+                                file_name = data
+                                handler = threading.Thread(target=sock.handle_user_input, args=(file_name, ))
+                                handler.start()
 
             for sock in exceptions:
                 sock = self.all_socks[sock]
@@ -988,7 +988,7 @@ class ClusterServer:
 
             actions = self.Actions
             action = actions.UNDEFINED_CODE
-            if 0 < op_code < 10:
+            if 0 < op_code < len(actions) - 1:
                 msg_fmt = None
                 action = actions(op_code)
                 if action == actions.PROCESSING_REQUEST:

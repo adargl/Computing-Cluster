@@ -1,0 +1,18 @@
+QsciScintilla {
+    background-color: #1E1E1E;
+    border-radius: 5px;
+}
+
+QsciLexerPython {
+    font-family: Consolas;
+    font-size: 12pt;
+    color: #D4D4D4;
+    background-color: #1E1E1E;
+}
+
+QsciLexerCPP {
+    font-family: Consolas;
+    font-size: 12pt;
+    color: #D4D4D4;
+    background-color: #1E1E1E;
+}

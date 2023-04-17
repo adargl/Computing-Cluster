@@ -43,26 +43,23 @@ class User(BaseClient):
         super().init_connection()
         self.connect_as_user()
 
-    def send_input_file(self):
-        pass
+    def send_input_file(self, file_name):
+        self.send_msg(self.conn_sock, self.Actions.USER_INPUT_FILE, file_name)
 
     def connect_as_user(self):
         super().connect_as_user()
         logger.info(f"[CONNECTION REQUEST] request sent to connect as a user")
 
 
+fmt = '%(name)s %(asctime)s.%(msecs)03d %(message)s', '%I:%M:%S'
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+stream_handler = logging.StreamHandler()
+stream_handler.setLevel(logger.level)
+stream_handler.setFormatter(CustomFormatter(*fmt))
+logger.addHandler(stream_handler)
+
 if __name__ == '__main__':
-    logging_file = 'Server.log'
-    fmt = '%(name)s %(asctime)s.%(msecs)03d %(message)s', '%I:%M:%S'
-    with open(logging_file, 'w'):
-        pass
-
-    logger = logging.getLogger(__name__)
-    logger.setLevel(logging.INFO)
-    stream_handler = logging.StreamHandler()
-    stream_handler.setLevel(logger.level)
-    stream_handler.setFormatter(CustomFormatter(*fmt))
-    logger.addHandler(stream_handler)
-
     client = User("localhost")
     client.init_connection()

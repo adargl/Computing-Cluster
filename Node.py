@@ -74,6 +74,19 @@ class Node(BaseClient):
                     executor.shutdown(wait=False)
                     break
 
+    def thread_failure(func):
+        def wrapper(self, *args, call_count=0, max_calls=3, **kwargs):
+            try:
+                func(self, *args, **kwargs)
+            except Exception as e:
+                logger.error(f"[ERROR ENCOUNTERED] attempt {call_count + 1} raised: {e}")
+                if call_count < max_calls:
+                    wrapper(self, *args, call_count=call_count + 1, max_calls=max_calls, **kwargs)
+                else:
+                    logger.critical("[ERROR ENCOUNTERED] passed the allowed amount of function calls")
+        return wrapper
+
+    @thread_failure
     def execute_task(self, executable_tree, template_id, task_id):
         with self.semaphore:
             params = executable_tree.params
@@ -107,5 +120,5 @@ if __name__ == '__main__':
     stream_handler.setFormatter(CustomFormatter(*fmt))
     logger.addHandler(stream_handler)
 
-    client = Node("localhost", 8)
+    client = Node("localhost", 10)
     client.init_connection()

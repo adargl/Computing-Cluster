@@ -16,7 +16,8 @@ class BaseClient:
         CONNECT_AS_MEDIATOR = 7
         CONNECT_AS_NODE = 8
         CONNECT_AS_USER = 9
-        UNDEFINED_CODE = 10
+        USER_INPUT_FILE = 10
+        UNDEFINED_CODE = 11
 
     def __init__(self, server_port=55555, send_format="utf-8", buffer_size=1024):
         self.server_ip = socket.gethostbyname(socket.gethostname())
