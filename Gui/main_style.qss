@@ -1,0 +1,57 @@
+QMainWindow {
+    background-color: #404258;
+    color: #e6e6ee
+}
+
+QTabWidget {
+    border: none;
+    background-color: #282c34;
+}
+
+
+QTabBar::tab {
+    background-color: #282c34;
+    max-height: 4ex;
+    padding: 10px 10px;
+    border-style: none;
+}
+
+
+QTabBar::tab::selected {
+    color: #d3d3d3;
+    border-style: none;
+    background-color: #2d2d2d;
+    border-bottom: 2px solid #d3d3d3;
+}
+
+
+QTabBar::close-button {
+    image: url("./sources/close.png");
+}
+
+QTabBar::close-button:hover {
+    image: url("./sources/close-hovered.png");
+}
+
+QsciScintilla {
+    border: none;
+}
+
+QTreeView {
+    background-color: #3E3945;
+    padding: 5px;
+    color: #d3d3d3;
+}
+
+QTreeView::item:hover {
+    background-color: #323842;
+    border: 1px soid #d3d3d3;
+    border-radius: 3px;
+    color: #d3d3d3;
+}
+
+QTreeView::item:selected {
+    background-color: #323842;
+    border-style: none;
+    color: #D3D3D3;
+}
