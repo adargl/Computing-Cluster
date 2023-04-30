@@ -1,6 +1,3 @@
-import pickle
-import socket
-from struct import pack, unpack
 from Client import BaseClient
 import logging
 
@@ -50,6 +47,9 @@ class Mediator(BaseClient):
         self.send_msg(self.conn_sock, self.Actions.GET_RESULTS_REQUEST, None, task_id)
         action, optional, reserved, response = self.recv_msg(self.conn_sock)
         return response
+
+    def change_template(self):
+        self.send_msg(self.conn_sock, self.Actions.CHANGE_TEMPLATE)
 
     def connect_as_mediator(self):
         super().connect_as_mediator()

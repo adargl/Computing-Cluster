@@ -131,7 +131,7 @@ class ClusterVisitor(ast.NodeVisitor):
     def __init__(self):
         self.names = {"parameters": "params", "mediator_class": "Mediator",
                       "mediator_object": "cluster", "processing_request": "send_request",
-                      "template_change": "template_change", "await": "get_results"}
+                      "template_change": "template_change", "await": "get_results", "change": "change_template"}
         self.module_node = None
 
         self.current_func = self.Function.empty_instance()
@@ -314,6 +314,7 @@ class ClusterModifier(ast.NodeTransformer):
         self.assign_params_node = str_to_ast_node(
             f"globals().update({self.names['parameters']})"
         )
+        self.change_template_node = str_to_ast_node(f"{self.names['mediator_object']}.{self.names['change']}()")
 
         self.setup_tree()
 
@@ -419,7 +420,6 @@ class ClusterModifier(ast.NodeTransformer):
             if isinstance(loop.node.target, ast.Name):
                 self.current_params.add(loop.node.target.id)
 
-        loop.node.body = [self.processing_request]
         for keyword in self.keywords:
             if keyword.keyword_type == self.KeywordTypes.RETURN:
                 if keyword.container is loop.node:
@@ -427,9 +427,17 @@ class ClusterModifier(ast.NodeTransformer):
                 else:
                     loop.node.body.append(keyword.container)
 
-        self.generic_visit(loop.container, None,
-                           "is_custom_visit", "is_container_node", "add",
-                           add_after={loop.node: (self.get_results, self.assign_results_nodes(self.all_params))})
+        loop.node.body = [self.processing_request]
+        if loop.loop_type == ObjectType.FOR:
+            self.generic_visit(loop.container, None,
+                               "is_custom_visit", "is_container_node", "add",
+                               add_after={loop.node: (self.get_results, self.assign_results_nodes(self.all_params),
+                                                      self.change_template_node)})
+        else:
+            loop.node.body.extend((self.get_results, *self.assign_results_nodes(self.all_params)))
+            self.generic_visit(loop.container, None,
+                               "is_custom_visit", "is_container_node", "add",
+                               add_after={loop.node: self.change_template_node})
 
     def modify_threads(self):
         sorted_by_container = dict()
@@ -683,7 +691,8 @@ class ClusterServer:
         CONNECT_AS_NODE = 8
         CONNECT_AS_USER = 9
         USER_INPUT_FILE = 10
-        UNDEFINED_CODE = 11
+        CHANGE_TEMPLATE = 11
+        UNDEFINED_CODE = 12
 
     class ConnectionStatus(Enum):
         USER = "User"
@@ -718,6 +727,7 @@ class ClusterServer:
             self.templates = dict()
             self.results = dict()
             self.get_results = False
+            self.change_template = False
             self.result_id = 0
             self.task_queue = queue.Queue()
 
@@ -831,8 +841,15 @@ class ClusterServer:
 
         def get_result(self):
             result_id, current_result = self.result_id, self.results[self.result_id]
-            self.result_id += 1
+            self.get_results = False
+            if self.change_template:
+                self.change_template_count()
             return result_id, current_result
+
+        def change_template_count(self):
+            if self.unhandled_requests == 0:
+                self.change_template = False
+                self.result_id += 1
 
         def update_result(self, original, params):
             new = {p: params[p] for p in original if p in params and not original[p] == params[p]}
@@ -933,6 +950,9 @@ class ClusterServer:
                         elif action == actions.GET_RESULTS_REQUEST:
                             with sock:
                                 sock.get_results = True
+                        elif action == actions.CHANGE_TEMPLATE:
+                            with sock:
+                                sock.change_template = True
                         elif action == actions.NODE_AVAILABLE:
                             self.node_queue.put(sock)
                             with self.task_condition:

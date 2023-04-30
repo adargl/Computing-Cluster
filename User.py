@@ -1,6 +1,3 @@
-import pickle
-import socket
-from struct import pack, unpack
 from Client import BaseClient
 import logging
 
@@ -63,3 +60,4 @@ logger.addHandler(stream_handler)
 if __name__ == '__main__':
     client = User("localhost")
     client.init_connection()
+    client.send_input_file("Examples/IterativeMergeSort.py")
