@@ -1,9 +1,11 @@
 import ast
+import astpretty
 import pickle
 import queue
 import select
 import socket
 import threading
+import builtins
 from enum import Enum
 from copy import deepcopy
 from time import time, perf_counter
@@ -13,35 +15,7 @@ from io import StringIO
 from contextlib import redirect_stdout
 
 import logging
-
-
-class CustomFormatter(logging.Formatter):
-    """Logging colored formatter, adapted from:
-     https://alexandra-zaharia.github.io/posts/make-your-own-custom-color-formatter-with-python-logging/"""
-
-    dark_grey = "\x1b[38;5;245m"
-    bright_grey = "\x1b[38;5;250m"
-    yellow = '\x1b[38;5;136m'
-    red = '\x1b[31;20m'
-    green = '\x1b[38;5;64m'
-    reset = '\x1b[0m'
-
-    def __init__(self, level_fmt, time_fmt):
-        super().__init__()
-        self.level_fmt = level_fmt
-        self.time_fmt = time_fmt
-        self.FORMATS = {
-            logging.DEBUG: self.dark_grey + self.level_fmt + self.reset,
-            logging.INFO: self.dark_grey + self.level_fmt + self.reset,
-            logging.WARNING: self.yellow + self.level_fmt + self.reset,
-            logging.ERROR: self.red + self.level_fmt + self.reset,
-            logging.CRITICAL: self.green + self.level_fmt + self.reset
-        }
-
-    def format(self, record):
-        log_fmt = self.FORMATS.get(record.levelno)
-        formatter = logging.Formatter(log_fmt, self.time_fmt)
-        return formatter.format(record)
+from Logger import CustomFormatter
 
 
 class ClusterVisitor(ast.NodeVisitor):
@@ -145,10 +119,23 @@ class ClusterVisitor(ast.NodeVisitor):
         self.parameters = set()
         self.builtin_funcs = set()
 
-    def is_builtin(self, func_node):
-        if not isinstance(func_node, ast.Call):
+    def is_builtin(self, node):
+        if not isinstance(node, (ast.Call, ast.Name)):
             return False
-        return not (isinstance(func_node.func, ast.Name) and func_node.func.id in self.functions.keys())
+        elif isinstance(node, ast.Call):
+            if not isinstance(node.func, ast.Name):
+                return False
+            node = node.func
+            if isinstance(node, ast.Attribute):
+                if not isinstance(node.value, ast.Name):
+                    return False
+                node = node.value
+        return node.id not in self.functions.keys() and (node.id in self.builtin_funcs or node.id in dir(builtins))
+
+    def is_external_function(self, node):
+        if not isinstance(node, ast.Call):
+            return False
+        return not (isinstance(node.func, ast.Name) and node.func.id in self.functions.keys())
 
     def generic_visit(self, node):
         if has_body(node):
@@ -213,7 +200,7 @@ class ClusterVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Call(self, node):
-        if not self.is_builtin(node):
+        if not self.is_external_function(node):
             func_name = node.func.id if isinstance(node.func, ast.Name) else None
             function = self.functions[func_name]
             function.set_used()
@@ -269,7 +256,7 @@ class ClusterVisitor(ast.NodeVisitor):
     def find_nested_functions(self, node):
         for child_node in ast.walk(node):
             if isinstance(child_node, ast.Call) and isinstance(child_node.func, ast.Name) \
-                    and child_node.func.id in self.functions.keys():
+                    and not self.is_builtin(child_node):
                 function = self.functions[child_node.func.id]
                 function.set_used()
                 self.find_nested_functions(function.node)
@@ -408,13 +395,13 @@ class ClusterModifier(ast.NodeTransformer):
             if has_body(node):
                 continue
             for child in ast.walk(node):
-                if isinstance(child, ast.Name) \
-                        and not (child.id in self.visitor.builtin_funcs or child.id in self.visitor.functions.keys()):
+                if isinstance(child, ast.Name) and not self.visitor.is_builtin(child):
                     self.current_params.add(child.id)
         shared_params = self.all_params.intersection(self.current_params)
         self.current_params = shared_params
 
         loop.freeze()
+        self.generic_visit(loop.snapshot.node)
         self.instructions = self.loop_to_instructions(loop.snapshot)
         if loop.loop_type == ObjectType.FOR:
             if isinstance(loop.node.target, ast.Name):
@@ -431,10 +418,10 @@ class ClusterModifier(ast.NodeTransformer):
         if loop.loop_type == ObjectType.FOR:
             self.generic_visit(loop.container, None,
                                "is_custom_visit", "is_container_node", "add",
-                               add_after={loop.node: (self.get_results, self.assign_results_nodes(self.all_params),
+                               add_after={loop.node: (self.get_results, self.assign_results_nodes(self.current_params),
                                                       self.change_template_node)})
         else:
-            loop.node.body.extend((self.get_results, *self.assign_results_nodes(self.all_params)))
+            loop.node.body.extend((self.get_results, *self.assign_results_nodes(self.current_params)))
             self.generic_visit(loop.container, None,
                                "is_custom_visit", "is_container_node", "add",
                                add_after={loop.node: self.change_template_node})
@@ -622,9 +609,14 @@ class ClusterModifier(ast.NodeTransformer):
         return node
 
     def visit_Name(self, node):
-        name = node.id
-        if not (name in self.visitor.builtin_funcs or name in self.visitor.functions.keys()):
-            self.all_params.add(name)
+        if not (self.visitor.is_builtin(node) or node.id in self.visitor.functions.keys()):
+            if self.current_params and node.id in self.current_params:
+                new_node = str_to_ast_node(f"{self.names['parameters']}['{node.id}']")
+                ast.copy_location(new_node, node)
+                ast.fix_missing_locations(new_node)
+                astpretty.pprint(new_node)
+                return new_node
+            self.all_params.add(node.id)
         self.generic_visit(node)
         return node
 
@@ -854,7 +846,7 @@ class ClusterServer:
         def update_result(self, original, params):
             new = {p: params[p] for p in original if p in params and not original[p] == params[p]}
             if new:
-                response = self.results[self.result_id]
+                response = self.results.get(self.result_id)
                 if not response:
                     response.update(new)
                 else:
@@ -868,7 +860,10 @@ class ClusterServer:
                                     if org_value[i] != new_value[i]:
                                         response[key][i] = new_value[i]
                                 else:
-                                    org_value.extend(new_value[i:])
+                                    if len(org_value) < len(new_value):
+                                        org_value.extend(new_value[i:])
+                                    elif len(org_value) > len(new_value):
+                                        response[key] = response[key][:-(len(org_value) - len(new_value))]
                             elif isinstance(org_value, dict):
                                 key_names = org_value.keys()
                                 for k in new_value.keys():

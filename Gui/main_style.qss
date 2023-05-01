@@ -3,9 +3,14 @@ QMainWindow {
     color: #e6e6ee
 }
 
+QFrame {
+    border-style: none;
+}
+
 QTabWidget {
     border: none;
-    background-color: #282c34;
+    border-style: none;
+    background-color: #3A3442;
 }
 
 
@@ -38,7 +43,8 @@ QsciScintilla {
 }
 
 QTreeView {
-    background-color: #3E3945;
+    background-color: #373843;
+    border-style: none;
     padding: 5px;
     color: #d3d3d3;
 }
@@ -47,6 +53,7 @@ QTreeView::item:hover {
     background-color: #323842;
     border: 1px soid #d3d3d3;
     border-radius: 3px;
+    border-style: none;
     color: #d3d3d3;
 }
 
