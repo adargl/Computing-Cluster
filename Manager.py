@@ -612,8 +612,8 @@ class ClusterModifier(ast.NodeTransformer):
         if not (self.visitor.is_builtin(node) or node.id in self.visitor.functions.keys()):
             if self.current_params and node.id in self.current_params:
                 new_node = str_to_ast_node(f"{self.names['parameters']}['{node.id}']")
-                ast.copy_location(new_node, node)
-                ast.fix_missing_locations(new_node)
+                # for child in ast.walk(new_node):
+                #     ast.copy_location(child, node)
                 astpretty.pprint(new_node)
                 return new_node
             self.all_params.add(node.id)

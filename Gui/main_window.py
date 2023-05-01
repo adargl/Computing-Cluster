@@ -176,6 +176,8 @@ class MainWindow(QMainWindow):
         sidebar_vertical_layout.addWidget(folder_button)
         search_button = self.add_sidebar_component("Search", "sources/search.png", lambda: None)
         sidebar_vertical_layout.addWidget(search_button)
+        run_button = self.add_sidebar_component("Run", "sources/run.png", lambda: self.run_file)
+        sidebar_vertical_layout.addWidget(run_button)
         spacer = QSpacerItem(20, 40, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
         sidebar_vertical_layout.addItem(spacer)
 
@@ -184,8 +186,13 @@ class MainWindow(QMainWindow):
         self.file_view = QFrame()
         self.file_view.setMaximumSize(QSize(*self.constants_json["file-view"]["sizes"]["max"]))
         self.file_view.setMinimumSize(QSize(*self.constants_json["file-view"]["sizes"]["min"]))
+        self.file_view.setStyleSheet(f'''
+        QFrame {{
+            background-color: {self.constants_json["file-view"]["paper-color"]};
+        }}''')
+        self.file_view.setObjectName("file_view")
         file_view_layout = QVBoxLayout(self.file_view)
-        file_view_layout.setContentsMargins(0, 0, 0, 0)
+        file_view_layout.setContentsMargins(*self.constants_json["file-view"]["sizes"]["margins"])
         file_view_layout.setSpacing(0)
         self.file_manager = FileManager(
             main_window=self,
@@ -194,6 +201,7 @@ class MainWindow(QMainWindow):
             constants=self.constants_json["file-view"]
         )
         file_view_layout.addWidget(self.file_manager)
+        file_view_layout.setObjectName("file_view_layout")
 
         # Setup widgets
         self.splitter = QSplitter(self)

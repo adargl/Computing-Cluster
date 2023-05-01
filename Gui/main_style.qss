@@ -1,5 +1,5 @@
 QMainWindow {
-    background-color: #404258;
+    background-color: #2E2E2E;
     color: #e6e6ee
 }
 
@@ -15,18 +15,18 @@ QTabWidget {
 
 
 QTabBar::tab {
-    background-color: #282c34;
-    max-height: 4ex;
+    background-color: #2d2d2d;
+    color: #E6E6EE;
+    max-height: 6ex;
     padding: 10px 10px;
-    border-style: none;
 }
 
 
 QTabBar::tab::selected {
-    color: #d3d3d3;
     border-style: none;
-    background-color: #2d2d2d;
-    border-bottom: 2px solid #d3d3d3;
+    color: #E6E6EE;
+    background-color: #585858;
+    border-bottom: 2px solid #E6E6EE;
 }
 
 
@@ -43,22 +43,27 @@ QsciScintilla {
 }
 
 QTreeView {
-    background-color: #373843;
+    background-color: #353236;
     border-style: none;
     padding: 5px;
-    color: #d3d3d3;
+    color: #E6E6EE;
+}
+
+QTreeView::item {
+    padding: 3px, 2px;
 }
 
 QTreeView::item:hover {
-    background-color: #323842;
-    border: 1px soid #d3d3d3;
-    border-radius: 3px;
+    background-color: #433F47;
+    border: 1px soid #E6E6EE;
+    border-radius: 5px;
     border-style: none;
-    color: #d3d3d3;
+    color: #E6E6EE;
 }
 
 QTreeView::item:selected {
-    background-color: #323842;
+    background-color: #58535D;
+    border-radius: 5px;
     border-style: none;
-    color: #D3D3D3;
+    color: #E6E6EE;
 }

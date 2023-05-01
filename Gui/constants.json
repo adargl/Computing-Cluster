@@ -23,14 +23,14 @@
                 "italic": false
             },
             "caret-foreground-color": "#dedcdc",
-            "caret-background-color": "#35313B",
+            "caret-background-color": "#444149",
             "selection-color": "#274E9D",
             "lines-foreground-color": "#ff888888",
-            "lines-background-color": "#2F2C34"
+            "lines-background-color": "#3A383E"
         },
         "sidebar": {
             "color": "#e6e6e6",
-            "paper-color": "#2e2e2e",
+            "paper-color": "#2E2E2E",
             "font": {
                 "family": "calibri",
                 "font-size": 12,
@@ -54,6 +54,7 @@
             }
         },
         "file-view": {
+            "paper-color": "#353236",
             "font": {
                 "family": "calibri",
                 "font-size": 12,
