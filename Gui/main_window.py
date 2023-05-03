@@ -4,7 +4,7 @@ from User import User
 from editor import CodeEditor
 from file_view import FileManager
 from PyQt6 import QtWidgets, QtGui
-from PyQt6.QtGui import QColor, QFont
+from PyQt6.QtGui import QFont
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtWidgets import *
 
@@ -16,8 +16,8 @@ class MainWindow(QMainWindow):
         super().__init__()
 
         # Connect to the cluster server
-        # self.sock = User("localhost")
-        # self.sock.init_connection()
+        self.sock = User("localhost")
+        self.sock.init_connection()
 
         # Init constants
         if not constants:

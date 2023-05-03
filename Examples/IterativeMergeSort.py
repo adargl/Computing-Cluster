@@ -2,6 +2,7 @@ from random import randint
 
 
 def merge_sort(array):
+    global a, s, t
     array = array.copy()
     subarrays = [[x] for x in array]
 

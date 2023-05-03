@@ -23,6 +23,7 @@ class ClusterVisitor(ast.NodeVisitor):
         def __init__(self, node, container):
             self.node = node
             self.container = container
+            self.child_stack = list()
             if isinstance(node, ast.AST):
                 self.lineno = node.lineno
                 self.end_lineno = node.end_lineno
@@ -41,7 +42,9 @@ class ClusterVisitor(ast.NodeVisitor):
             super().__init__(node, container)
             self.loop_type = loop_type
             self.parameters = None
+            self.loop = None
             self.function = None
+            self.is_within_loop = False
             self.is_within_func = False
             self.is_nested = False
 
@@ -55,6 +58,10 @@ class ClusterVisitor(ast.NodeVisitor):
         def set_within_func(self, function):
             self.is_within_func = True
             self.function = function
+
+        def set_within_loop(self, loop):
+            self.is_within_loop = True
+            self.loop = loop
 
         def set_nested(self):
             self.is_nested = True
@@ -111,6 +118,7 @@ class ClusterVisitor(ast.NodeVisitor):
         self.current_func = self.Function.empty_instance()
         self.current_loop = self.Loop.empty_instance()
         self.current_container = None
+        self.hierarchy_stack = list()
 
         self.imports = {"import": [], "from": []}
         self.loops = list()
@@ -118,6 +126,10 @@ class ClusterVisitor(ast.NodeVisitor):
         self.functions = dict()
         self.parameters = set()
         self.builtin_funcs = set()
+
+    @staticmethod
+    def is_within(node, container):
+        return container.lineno < node.lineno <= container.end_lineno
 
     def is_builtin(self, node):
         if not isinstance(node, (ast.Call, ast.Name)):
@@ -180,7 +192,7 @@ class ClusterVisitor(ast.NodeVisitor):
             if isinstance(name, ast.Name):
                 self.create_thread(node, name.id)
         else:
-            if not self.current_loop.lineno < node.lineno <= self.current_loop.end_lineno:
+            if not self.is_within(node, self.current_loop):
                 self.parameters.update(
                     [child_node.id for child_node in node.targets if isinstance(child_node, ast.Name) and
                      child_node.id not in self.builtin_funcs]
@@ -205,7 +217,7 @@ class ClusterVisitor(ast.NodeVisitor):
             function = self.functions[func_name]
             function.set_used()
 
-            if self.current_loop.lineno < node.lineno <= self.current_loop.end_lineno:
+            if self.is_within(node, self.current_loop):
                 loop = self.loops[-1]
                 loop.set_nested()
                 self.find_nested_functions(function.node)
@@ -220,17 +232,27 @@ class ClusterVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_loop(self, node, loop_type):
-        if not self.current_loop.lineno < node.lineno <= self.current_loop.end_lineno:
+        if not self.is_within(node, self.current_loop):
             loop = self.Loop(node, self.current_container, loop_type)
             self.loops.append(loop)
             self.current_loop = loop
-            if self.current_func.lineno < node.lineno <= self.current_func.end_lineno:
-                loop.set_within_func(self.current_func)
         else:
             loop = self.loops[-1]
             loop.set_nested()
+            loop = self.Loop(node, self.current_container, loop_type)
+            self.loops.append(loop)
             if isinstance(node.target, ast.Name):
                 self.builtin_funcs.add(node.target.id)
+
+        if self.is_within(node, self.current_func):
+            loop.set_within_func(self.current_func)
+        while self.hierarchy_stack and not self.is_within(node, self.hierarchy_stack[-1]):
+            self.hierarchy_stack.pop()
+        if self.hierarchy_stack:
+            base_loop = self.hierarchy_stack[0]
+            base_loop.child_stack.append(loop)
+            loop.set_within_loop(base_loop)
+        self.hierarchy_stack.append(loop)
 
         self.generic_visit(node)
 
@@ -245,8 +267,7 @@ class ClusterVisitor(ast.NodeVisitor):
                         and name.id not in self.builtin_funcs]
 
         # Make sure that the thread function call is not recursive
-        if not self.current_func.lineno < assign_node.lineno <= self.current_func.end_lineno \
-                or func_name != self.current_func.name:
+        if not self.is_within(assign_node, self.current_loop) or func_name != self.current_func.name:
             thread = self.Thread(assign_node, self.current_container, args, func_name, name)
             self.threads.append(thread)
             function = self.functions[func_name]
@@ -293,6 +314,8 @@ class ClusterModifier(ast.NodeTransformer):
         self.max_concurrent_loops = 4
         self.current_container = None
         self.instructions = None
+
+        self.trace_param_names = False
 
         # Create new nodes that do not depend on variables values
         self.assign_results_node = str_to_ast_node(
@@ -382,24 +405,31 @@ class ClusterModifier(ast.NodeTransformer):
         new_obj_node = str_to_ast_node(f"{self.names['mediator_object']} = {self.names['mediator_class']}()")
         module_node.body.insert(count, new_obj_node)
 
-    def modify_loop(self, loop):
-
+    def setup_loop(self, loop):
         # Find out which parameters should be passed into the processing request
-        self.generic_visit(loop.node)
-        if isinstance(loop.container, ast.FunctionDef):
-            function_name = loop.container.name
-            function = self.visitor.functions[function_name]
-            self.current_params.update(function.args)
+        if not loop.is_within_func:
+            self.all_params.update(self.visitor.parameters)
+        else:
+            for node in loop.function.node.body:
+                if has_body(node):
+                    continue
+                elif isinstance(node, ast.Global):
+                    self.all_params.update(node.names)
+                else:
+                    for child in ast.walk(node):
+                        if isinstance(child, ast.Name) and not self.visitor.is_builtin(child):
+                            self.all_params.add(child.id)
 
-        for node in loop.container.body:
-            if has_body(node):
-                continue
-            for child in ast.walk(node):
-                if isinstance(child, ast.Name) and not self.visitor.is_builtin(child):
-                    self.current_params.add(child.id)
+        if loop.is_within_func:
+            function_name = loop.function.name
+            function = self.visitor.functions[function_name]
+            self.all_params.update(function.args)
+
+        self.generic_visit(loop.node)
         shared_params = self.all_params.intersection(self.current_params)
         self.current_params = shared_params
 
+    def modify_loop(self, loop):
         loop.freeze()
         self.generic_visit(loop.snapshot.node)
         self.instructions = self.loop_to_instructions(loop.snapshot)
@@ -610,13 +640,14 @@ class ClusterModifier(ast.NodeTransformer):
 
     def visit_Name(self, node):
         if not (self.visitor.is_builtin(node) or node.id in self.visitor.functions.keys()):
-            if self.current_params and node.id in self.current_params:
-                new_node = str_to_ast_node(f"{self.names['parameters']}['{node.id}']")
-                # for child in ast.walk(new_node):
-                #     ast.copy_location(child, node)
-                astpretty.pprint(new_node)
-                return new_node
-            self.all_params.add(node.id)
+            if self.trace_param_names:
+                self.current_params.add(node.id)
+            else:
+                if self.current_params and node.id in self.current_params:
+                    new_node = str_to_ast_node(f"{self.names['parameters']}['{node.id}']")
+                    # for child in ast.walk(new_node):
+                    #     ast.copy_location(child, node)
+                    return new_node
         self.generic_visit(node)
         return node
 
@@ -632,9 +663,16 @@ class ClusterModifier(ast.NodeTransformer):
         self.templates_count += 1
 
     def create_templates(self):
+        def to_modify_loop(current_loop) -> bool:
+            if not current_loop.is_nested or current_loop.is_within_loop:
+                return False
+            return True
+
         for loop in self.visitor.loops:
-            if loop.is_nested:
-                self.generic_visit(loop.node)
+            if to_modify_loop(loop):
+                self.trace_param_names = True
+                self.setup_loop(loop)
+                self.trace_param_names = False
                 self.modify_loop(loop)
                 self.create_template()
                 self.clear_data()
@@ -659,16 +697,6 @@ class ObjectType(Enum):
 
 
 class ClusterServer:
-    # number  |  operation code
-    #  0      |  reserved
-    #  1      |  processing request
-    #  2      |  processing response
-    #  3      |  get results
-    #  4      |  node available
-    #  5      |  send to cluster
-    #  6      |  return response
-    #  7      |  initiate connection
-
     RUN_START_TIME = None
 
     class Actions(Enum):
@@ -856,14 +884,14 @@ class ClusterServer:
                             response[key] = new[key]
                         else:
                             if isinstance(org_value, list):
-                                for i in range(len(new_value)):
+                                org_len, new_len = len(org_value), len(new_value)
+                                for i in range(min(org_len, new_len)):
                                     if org_value[i] != new_value[i]:
                                         response[key][i] = new_value[i]
-                                else:
-                                    if len(org_value) < len(new_value):
-                                        org_value.extend(new_value[i:])
-                                    elif len(org_value) > len(new_value):
-                                        response[key] = response[key][:-(len(org_value) - len(new_value))]
+                                if org_len < new_len:
+                                    org_value.extend(new_value[org_len:])
+                                elif org_len > new_len:
+                                    response[key] = response[key][:-(org_len - new_len)]
                             elif isinstance(org_value, dict):
                                 key_names = org_value.keys()
                                 for k in new_value.keys():
@@ -973,7 +1001,7 @@ class ClusterServer:
                         elif action == actions.USER_INPUT_FILE:
                             with sock:
                                 file_name = data
-                                handler = threading.Thread(target=sock.handle_user_input, args=(file_name, ))
+                                handler = threading.Thread(target=sock.handle_user_input, args=(file_name,))
                                 handler.start()
 
             for sock in exceptions:
@@ -1104,8 +1132,8 @@ class TaskMaker:
     @staticmethod
     def extend_in_index(lst, iterable, index):
         if is_iterable(iterable):
-            for count, item in enumerate(iterable):
-                lst.insert(index + count, item)
+            for counter, item in enumerate(iterable):
+                lst.insert(index + counter, item)
         else:
             lst.insert(index, iterable)
 
