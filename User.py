@@ -32,4 +32,4 @@ logger.addHandler(stream_handler)
 if __name__ == '__main__':
     client = User("localhost")
     client.init_connection()
-    client.send_input_file("Examples/IterativeMergeSort.py")
+    client.send_input_file("Examples/Xrisper.py")

@@ -644,9 +644,8 @@ class ClusterModifier(ast.NodeTransformer):
                 self.current_params.add(node.id)
             else:
                 if self.current_params and node.id in self.current_params:
-                    new_node = str_to_ast_node(f"{self.names['parameters']}['{node.id}']")
-                    # for child in ast.walk(new_node):
-                    #     ast.copy_location(child, node)
+                    new_node = ast.Name(id=f"{self.names['parameters']}['{node.id}']", ctx=node.ctx)
+                    ast.copy_location(new_node, node)
                     return new_node
         self.generic_visit(node)
         return node
@@ -879,9 +878,12 @@ class ClusterServer:
                     response.update(new)
                 else:
                     for key in response.keys():
-                        org_value, new_value = original[key], new[key]
-                        if not type(org_value) == type(new_value):
-                            response[key] = new[key]
+                        org_value, new_value = original.get(key), new.get(key)
+                        if not (org_value or new_value):
+                            continue
+                        elif not type(org_value) == type(new_value):
+                            if new_value:
+                                response[key] = new[key]
                         else:
                             if isinstance(org_value, list):
                                 org_len, new_len = len(org_value), len(new_value)

@@ -176,7 +176,7 @@ class MainWindow(QMainWindow):
         sidebar_vertical_layout.addWidget(folder_button)
         search_button = self.add_sidebar_component("Search", "sources/search.png", lambda: None)
         sidebar_vertical_layout.addWidget(search_button)
-        run_button = self.add_sidebar_component("Run", "sources/run.png", lambda: self.run_file)
+        run_button = self.add_sidebar_component("Run", "sources/run.png", self.run_file)
         sidebar_vertical_layout.addWidget(run_button)
         spacer = QSpacerItem(20, 40, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
         sidebar_vertical_layout.addItem(spacer)

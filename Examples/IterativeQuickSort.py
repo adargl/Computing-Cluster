@@ -1,3 +1,6 @@
+from random import randint
+
+
 def quick_sort(array):
     # Initialize a stack with the array and its indices
     stack = [(0, len(array)-1)]
@@ -13,6 +16,11 @@ def quick_sort(array):
             # Push the subarrays to the left and right of the pivot element to the stack
             stack.append((start, pivot-1))
             stack.append((pivot+1, end))
+            # Sort the subarrays
+            sort_subarray(array, start, pivot-1)
+            sort_subarray(array, pivot+1, end)
+
+    return array
 
 
 def partition(array, start, end):
@@ -32,7 +40,15 @@ def partition(array, start, end):
     return i + 1
 
 
+def sort_subarray(array, start, end):
+    # If the subarray has more than one element, sort it using insertion sort
+    for i in range(start+1, end+1):
+        j = i
+        while j > start and array[j] < array[j-1]:
+            array[j], array[j-1] = array[j-1], array[j]
+            j -= 1
+
+
 # Test the quick_sort function
-array = [3, 7, 1, 5, 2, 8, 4, 6]
-quick_sort(array)
-print(array)  # Output: [1, 2, 3, 4, 5, 6, 7, 8]
+lst = list(map(lambda x: randint(1, 100), range(100)))
+print(quick_sort(lst))
