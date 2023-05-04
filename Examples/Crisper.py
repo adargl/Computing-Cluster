@@ -40,6 +40,7 @@ def find_best_fit(sequence1, sequence2):
     while len(longer_seq) > len(shorter_seq) + offset:
         seq = compare(sequence1, sequence2, offset)
         offset_to_score[offset] = get_score(seq)
+        ...
         offset += 1
 
     max_pair = 0, -sys.maxsize - 1

@@ -315,7 +315,7 @@ class ClusterModifier(ast.NodeTransformer):
         self.current_container = None
         self.instructions = None
 
-        self.trace_param_names = False
+        self.visit_params = False
 
         # Create new nodes that do not depend on variables values
         self.assign_results_node = str_to_ast_node(
@@ -430,6 +430,16 @@ class ClusterModifier(ast.NodeTransformer):
         self.current_params = shared_params
 
     def modify_loop(self, loop):
+        user_marked_nodes = []
+        for i, node in enumerate(loop.node.body):
+            if has_body(node):
+                continue
+            for child in ast.walk(node):
+                if isinstance(child, ast.Ellipsis):
+                    user_marked_nodes.extend(loop.node.body[i + 1:])
+                    loop.node.body = loop.node.body[:i]
+                    break
+
         loop.freeze()
         self.generic_visit(loop.snapshot.node)
         self.instructions = self.loop_to_instructions(loop.snapshot)
@@ -455,6 +465,7 @@ class ClusterModifier(ast.NodeTransformer):
             self.generic_visit(loop.container, None,
                                "is_custom_visit", "is_container_node", "add",
                                add_after={loop.node: self.change_template_node})
+        loop.node.body.extend(user_marked_nodes)
 
     def modify_threads(self):
         sorted_by_container = dict()
@@ -640,7 +651,7 @@ class ClusterModifier(ast.NodeTransformer):
 
     def visit_Name(self, node):
         if not (self.visitor.is_builtin(node) or node.id in self.visitor.functions.keys()):
-            if self.trace_param_names:
+            if self.visit_params:
                 self.current_params.add(node.id)
             else:
                 if self.current_params and node.id in self.current_params:
@@ -669,9 +680,9 @@ class ClusterModifier(ast.NodeTransformer):
 
         for loop in self.visitor.loops:
             if to_modify_loop(loop):
-                self.trace_param_names = True
+                self.visit_params = True
                 self.setup_loop(loop)
-                self.trace_param_names = False
+                self.visit_params = False
                 self.modify_loop(loop)
                 self.create_template()
                 self.clear_data()
