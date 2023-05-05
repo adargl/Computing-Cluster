@@ -1,5 +1,4 @@
 import ast
-import astpretty
 import pickle
 import queue
 import select
@@ -112,7 +111,7 @@ class ClusterVisitor(ast.NodeVisitor):
     def __init__(self):
         self.names = {"parameters": "params", "mediator_class": "Mediator",
                       "mediator_object": "cluster", "processing_request": "send_request",
-                      "template_change": "template_change", "await": "get_results", "change": "change_template"}
+                      "template_change": "template_change", "await": "get_results"}
         self.module_node = None
 
         self.current_func = self.Function.empty_instance()
@@ -307,11 +306,11 @@ class ClusterModifier(ast.NodeTransformer):
         self.templates = dict()
         self.keywords = list()
         self.global_nodes = list()
+        self.manually_marked_nodes = list()
         self.current_params = set()
         self.all_params = set()
 
         self.templates_count = 0
-        self.max_concurrent_loops = 4
         self.current_container = None
         self.instructions = None
 
@@ -324,7 +323,6 @@ class ClusterModifier(ast.NodeTransformer):
         self.assign_params_node = str_to_ast_node(
             f"globals().update({self.names['parameters']})"
         )
-        self.change_template_node = str_to_ast_node(f"{self.names['mediator_object']}.{self.names['change']}()")
 
         self.setup_tree()
 
@@ -406,6 +404,15 @@ class ClusterModifier(ast.NodeTransformer):
         module_node.body.insert(count, new_obj_node)
 
     def setup_loop(self, loop):
+        for i, node in enumerate(loop.node.body):
+            if has_body(node):
+                continue
+            for child in ast.walk(node):
+                if isinstance(child, ast.Ellipsis):
+                    self.manually_marked_nodes.extend(loop.node.body[i + 1:])
+                    loop.node.body = loop.node.body[:i]
+                    break
+
         # Find out which parameters should be passed into the processing request
         if not loop.is_within_func:
             self.all_params.update(self.visitor.parameters)
@@ -430,18 +437,9 @@ class ClusterModifier(ast.NodeTransformer):
         self.current_params = shared_params
 
     def modify_loop(self, loop):
-        user_marked_nodes = []
-        for i, node in enumerate(loop.node.body):
-            if has_body(node):
-                continue
-            for child in ast.walk(node):
-                if isinstance(child, ast.Ellipsis):
-                    user_marked_nodes.extend(loop.node.body[i + 1:])
-                    loop.node.body = loop.node.body[:i]
-                    break
-
         loop.freeze()
         self.generic_visit(loop.snapshot.node)
+
         self.instructions = self.loop_to_instructions(loop.snapshot)
         if loop.loop_type == ObjectType.FOR:
             if isinstance(loop.node.target, ast.Name):
@@ -456,16 +454,14 @@ class ClusterModifier(ast.NodeTransformer):
 
         loop.node.body = [self.processing_request]
         if loop.loop_type == ObjectType.FOR:
-            self.generic_visit(loop.container, None,
-                               "is_custom_visit", "is_container_node", "add",
-                               add_after={loop.node: (self.get_results, self.assign_results_nodes(self.current_params),
-                                                      self.change_template_node)})
+            self.add_new_nodes(
+                loop.container,
+                add_after={loop.node: (self.get_results, self.assign_results_nodes(self.current_params))}
+            )
         else:
             loop.node.body.extend((self.get_results, *self.assign_results_nodes(self.current_params)))
-            self.generic_visit(loop.container, None,
-                               "is_custom_visit", "is_container_node", "add",
-                               add_after={loop.node: self.change_template_node})
-        loop.node.body.extend(user_marked_nodes)
+
+        loop.node.body.extend(self.manually_marked_nodes)
 
     def modify_threads(self):
         sorted_by_container = dict()
@@ -523,6 +519,16 @@ class ClusterModifier(ast.NodeTransformer):
         method = 'modify_' + str(enum_type)
         visitor = getattr(self, method)
         visitor(obj)
+
+    def add_new_nodes(self, container_node, add_after=None, add_before=None):
+        if add_after:
+            self.generic_visit(container_node, None,
+                               "is_custom_visit", "is_container_node", "add",
+                               add_after=add_after)
+        elif add_before:
+            self.generic_visit(container_node, None,
+                               "is_custom_visit", "is_container_node", "add",
+                               add_before=add_before)
 
     def generic_visit(self, node, modified_nodes=None, *flags, **operations):
 
@@ -692,6 +698,7 @@ class ClusterModifier(ast.NodeTransformer):
     def clear_data(self):
         self.current_params.clear()
         self.all_params.clear()
+        self.manually_marked_nodes.clear()
         self.instructions = None
 
 
@@ -757,8 +764,7 @@ class ClusterServer:
             self.templates = dict()
             self.results = dict()
             self.get_results = False
-            self.change_template = False
-            self.result_id = 0
+            self.template_id = 0
             self.task_queue = queue.Queue()
 
             # If connection_type is User
@@ -823,12 +829,10 @@ class ClusterServer:
         def time_stamp_action(self, action):
             self.time_stamps.append((time(), action))
 
-        def handle_user_input(self, file_name="Examples/CaesarCipher.py"):
-            file = file_name
+        def handle_user_input(self, file):
             modified_file = "Modified.py"
             byproduct_file = "Created.py"
-            with open(file) as source:
-                ast_tree = ast.parse(source.read())
+            ast_tree = ast.parse(file)
 
             visitor = ClusterVisitor()
             visitor.visit(ast_tree)
@@ -837,7 +841,7 @@ class ClusterServer:
             templates = modifier.templates
 
             if templates:
-                logger.warning(f"File {file} is breakable")
+                logger.warning(f"File is breakable")
                 self.templates = templates
                 self._all_templates.put(templates)
 
@@ -848,7 +852,7 @@ class ClusterServer:
                 exec_tree(modified_code)
                 pass
             else:
-                logger.warning(f"File {file} is unbreakable")
+                logger.warning(f"File is unbreakable")
 
         def add_request(self, template_id, params):
             self.task_queue.put((template_id, params))
@@ -870,21 +874,14 @@ class ClusterServer:
             return task.to_executable()
 
         def get_result(self):
-            result_id, current_result = self.result_id, self.results[self.result_id]
+            template_id, current_result = self.template_id, self.results[self.template_id]
             self.get_results = False
-            if self.change_template:
-                self.change_template_count()
-            return result_id, current_result
-
-        def change_template_count(self):
-            if self.unhandled_requests == 0:
-                self.change_template = False
-                self.result_id += 1
+            return template_id, current_result
 
         def update_result(self, original, params):
             new = {p: params[p] for p in original if p in params and not original[p] == params[p]}
             if new:
-                response = self.results.get(self.result_id)
+                response = self.results.get(self.template_id)
                 if not response:
                     response.update(new)
                 else:
@@ -984,11 +981,10 @@ class ClusterServer:
                             with self.task_condition:
                                 self.task_condition.notify()
                         elif action == actions.GET_RESULTS_REQUEST:
+                            template_id = reserved
                             with sock:
                                 sock.get_results = True
-                        elif action == actions.CHANGE_TEMPLATE:
-                            with sock:
-                                sock.change_template = True
+                                sock.template_id = template_id
                         elif action == actions.NODE_AVAILABLE:
                             self.node_queue.put(sock)
                             with self.task_condition:
@@ -1013,8 +1009,8 @@ class ClusterServer:
                                 sock.set_connection_type(action)
                         elif action == actions.USER_INPUT_FILE:
                             with sock:
-                                file_name = data
-                                handler = threading.Thread(target=sock.handle_user_input, args=(file_name,))
+                                file = data
+                                handler = threading.Thread(target=sock.handle_user_input, args=(file,))
                                 handler.start()
 
             for sock in exceptions:

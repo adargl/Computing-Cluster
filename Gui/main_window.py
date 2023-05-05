@@ -348,7 +348,9 @@ class MainWindow(QMainWindow):
         self.current_filepath.write_text(program)
 
     def run_file(self):
-        self.sock.send_input_file(self.current_filepath)
+        if self.current_filepath:
+            with open(self.current_filepath) as file:
+                self.sock.send_input_file(file.read())
 
     def show_dialog(self, title, text):
         dialog = QMessageBox(self)

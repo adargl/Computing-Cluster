@@ -20,9 +20,6 @@ class Mediator(BaseClient):
         action, optional, reserved, response = self.recv_msg(self.conn_sock)
         return response
 
-    def change_template(self):
-        self.send_msg(self.conn_sock, self.Actions.CHANGE_TEMPLATE)
-
     def connect_as_mediator(self):
         super().connect_as_mediator()
         logger.info(f"[CONNECTION REQUEST] request sent to connect as a mediator")

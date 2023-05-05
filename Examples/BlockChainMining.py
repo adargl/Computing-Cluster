@@ -11,6 +11,7 @@ def find_nonce(block_header, difficulty):
 
     # Start with a nonce of 0
     nonce = 0
+    hash_result = None
 
     while True:
         # Add the nonce to the input string
@@ -19,6 +20,7 @@ def find_nonce(block_header, difficulty):
         # Calculate the SHA-256 hash of the input string with the nonce
         hash_result = get_hash(input_str_with_nonce)
 
+        ...
         # Check if the hash meets the difficulty requirement
         if hash_result.startswith('0' * difficulty):
             return nonce, hash_result

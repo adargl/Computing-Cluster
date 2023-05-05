@@ -12,8 +12,8 @@ class User(BaseClient):
         super().init_connection()
         self.connect_as_user()
 
-    def send_input_file(self, file_name):
-        self.send_msg(self.conn_sock, self.Actions.USER_INPUT_FILE, file_name)
+    def send_input_file(self, file):
+        self.send_msg(self.conn_sock, self.Actions.USER_INPUT_FILE, file)
 
     def connect_as_user(self):
         super().connect_as_user()
@@ -32,4 +32,6 @@ logger.addHandler(stream_handler)
 if __name__ == '__main__':
     client = User("localhost")
     client.init_connection()
-    client.send_input_file("Examples/Crisper.py")
+    file_name = "Examples/BlockChainMining.py"
+    with open(file_name) as f:
+        client.send_input_file(f.read())
