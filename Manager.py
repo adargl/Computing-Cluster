@@ -72,6 +72,7 @@ class ClusterVisitor(ast.NodeVisitor):
                 self.name = node.name
                 self.args = set(arg.arg for arg in node.args.args)
                 self.is_used = False
+                self.was_visited = False
 
         def __str__(self):
             return f"Name: {self.name}, Used: {self.is_used}"
@@ -82,6 +83,9 @@ class ClusterVisitor(ast.NodeVisitor):
 
         def set_used(self):
             self.is_used = True
+
+        def set_visited(self):
+            self.was_visited = True
 
     class Thread(Node):
         def __init__(self, node, container, parameters, func_name, name=None):
@@ -174,8 +178,11 @@ class ClusterVisitor(ast.NodeVisitor):
             # Save the function node and name
             self.functions[node.name] = function
         else:
-            self.current_func = self.functions[node.name]
-            self.generic_visit(node)
+            function = self.functions[node.name]
+            if not function.was_visited:
+                self.current_func = function
+                self.generic_visit(node)
+                self.current_func.set_visited()
 
     def visit_For(self, node):
         self.visit_loop(node, ObjectType.FOR)
@@ -213,6 +220,8 @@ class ClusterVisitor(ast.NodeVisitor):
     def visit_Call(self, node):
         if not self.is_external_function(node):
             func_name = node.func.id if isinstance(node.func, ast.Name) else None
+            if not func_name:
+                return
             function = self.functions[func_name]
             function.set_used()
 
@@ -283,19 +292,6 @@ class ClusterVisitor(ast.NodeVisitor):
 
 
 class ClusterModifier(ast.NodeTransformer):
-    class KeywordTypes(Enum):
-        GLOBAL = ast.Global
-        BREAK = ast.Break
-        CONTINUE = ast.Continue
-        PASS = ast.Pass
-        RETURN = ast.Return
-
-    class Keyword:
-        def __init__(self, node, container, keyword_type):
-            self.keyword_type = keyword_type
-            self.node = node
-            self.container = container
-
     def __init__(self, visitor):
         self.visitor = visitor
         self.names = visitor.names
@@ -304,7 +300,6 @@ class ClusterModifier(ast.NodeTransformer):
         self.original_functions = [deepcopy(function) for function in self.modified_functions]
 
         self.templates = dict()
-        self.keywords = list()
         self.global_nodes = list()
         self.manually_marked_nodes = list()
         self.current_params = set()
@@ -439,18 +434,11 @@ class ClusterModifier(ast.NodeTransformer):
     def modify_loop(self, loop):
         loop.freeze()
         self.generic_visit(loop.snapshot.node)
-
         self.instructions = self.loop_to_instructions(loop.snapshot)
+
         if loop.loop_type == ObjectType.FOR:
             if isinstance(loop.node.target, ast.Name):
                 self.current_params.add(loop.node.target.id)
-
-        for keyword in self.keywords:
-            if keyword.keyword_type == self.KeywordTypes.RETURN:
-                if keyword.container is loop.node:
-                    loop.node.body.append(keyword.node)
-                else:
-                    loop.node.body.append(keyword.container)
 
         loop.node.body = [self.processing_request]
         if loop.loop_type == ObjectType.FOR:
@@ -463,7 +451,7 @@ class ClusterModifier(ast.NodeTransformer):
 
         loop.node.body.extend(self.manually_marked_nodes)
 
-    def modify_threads(self):
+    def setup_threads(self):
         sorted_by_container = dict()
         for thread in self.visitor.threads:
             if thread.start_call and thread.join_call:
@@ -474,6 +462,9 @@ class ClusterModifier(ast.NodeTransformer):
         self.instructions = (self.thread_to_instructions(thread) for _, threads in sorted_by_container.items()
                              for thread in threads)
 
+        return sorted_by_container
+
+    def modify_threads(self, sorted_by_container):
         for container, threads in sorted_by_container.items():
             threads.sort(key=lambda t: t.join_call.lineno)
             last_thread = threads[0]
@@ -650,11 +641,6 @@ class ClusterModifier(ast.NodeTransformer):
         self.generic_visit(node)
         return None
 
-    def visit_Return(self, node):
-        self.keywords.append(self.Keyword(node, self.current_container, self.KeywordTypes.RETURN))
-        self.generic_visit(node)
-        return node
-
     def visit_Name(self, node):
         if not (self.visitor.is_builtin(node) or node.id in self.visitor.functions.keys()):
             if self.visit_params:
@@ -693,7 +679,8 @@ class ClusterModifier(ast.NodeTransformer):
                 self.create_template()
                 self.clear_data()
 
-        self.modify_threads()
+        sorted_by_container = self.setup_threads()
+        self.modify_threads(sorted_by_container)
 
     def clear_data(self):
         self.current_params.clear()
@@ -728,7 +715,7 @@ class ClusterServer:
         CONNECT_AS_NODE = 8
         CONNECT_AS_USER = 9
         USER_INPUT_FILE = 10
-        CHANGE_TEMPLATE = 11
+        FINAL_RESPONSE = 11
         UNDEFINED_CODE = 12
 
     class ConnectionStatus(Enum):
@@ -849,8 +836,7 @@ class ClusterServer:
                 with open(modified_file, 'w') as output_file:
                     output_file.write(modified_code)
                 modified_code = ast.parse(modified_code)
-                exec_tree(modified_code)
-                pass
+                ClusterServer.exec_tree(self, modified_code)
             else:
                 logger.warning(f"File is unbreakable")
 
@@ -891,7 +877,7 @@ class ClusterServer:
                             continue
                         elif not type(org_value) == type(new_value):
                             if new_value:
-                                response[key] = new[key]
+                                response[key] = new_value
                         else:
                             if isinstance(org_value, list):
                                 org_len, new_len = len(org_value), len(new_value)
@@ -910,6 +896,8 @@ class ClusterServer:
                                             response[key][k] = new_value[k]
                                     else:
                                         response[key][k] = new_value[k]
+                            else:
+                                response[key] = new_value
 
         def node_failure(self):
             pass
@@ -1125,6 +1113,35 @@ class ClusterServer:
             sock.node_failure()
         logger.info(f"[CONNECTION CLOSED] connection from {sock.ip}, {sock.port} had been closed")
 
+    @classmethod
+    def exec_tree(cls, sock, tree, file_name=''):
+        start_time = perf_counter()
+        std_out = StringIO()
+        with redirect_stdout(std_out):
+            exec(compile(tree, file_name, 'exec'), {'builtins': globals()['__builtins__']})
+        finish_time = perf_counter()
+
+        # Remove the last char from the output since it is always '\n'
+        output = std_out.getvalue()[:-1]
+        user_output = f"{'-' * 10}Final{'-' * 10}\n" + output \
+                      + f"\n{'-' * 12}+{'-' * 12}"
+        runtime = finish_time - start_time
+        logger.critical("[EXECUTION FINISHED] Program output:\n" + user_output
+                        + f"\nfinished in {runtime} second(s)")
+
+        cls.send_final_output(sock, "Completed", user_output, runtime, "Empty")
+
+    @classmethod
+    def send_final_output(cls, sock, status, result, runtime, communication):
+        status, runtime = pickle.dumps(status), pickle.dumps(runtime)
+        result, communication = pickle.dumps(result), pickle.dumps(communication)
+
+        pickled_msg = pack('>4I', len(status), len(runtime), len(result), len(communication)) \
+                      + status + runtime + result + communication
+
+        with sock as socket_object:
+            socket_object.sendall(pickled_msg)
+
 
 class TaskMaker:
     def __init__(self, tree, inject_index, instructions, params_name):
@@ -1186,19 +1203,6 @@ def is_iterable(obj: object):
 
 def has_body(ast_node):
     return hasattr(ast_node, 'body') and is_iterable(ast_node.body)
-
-
-def exec_tree(tree, file_name=''):
-    start_time = perf_counter()
-    std_out = StringIO()
-    with redirect_stdout(std_out):
-        exec(compile(tree, file_name, 'exec'), {'builtins': globals()['__builtins__']})
-    finish_time = perf_counter()
-
-    # Remove the last char from the output since it is always '\n'
-    output = std_out.getvalue()[:-1]
-    logger.critical(f"[EXECUTION FINISHED] Program output:\n{'-' * 10}Final{'-' * 10}\n" + output
-                    + f"\n{'-' * 12}+{'-' * 12}\nfinished in {finish_time - start_time} second(s)")
 
 
 if __name__ == '__main__':

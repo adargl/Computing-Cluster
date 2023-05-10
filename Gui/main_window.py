@@ -3,21 +3,32 @@ import json
 from User import User
 from editor import CodeEditor
 from file_view import FileManager
-from PyQt6 import QtWidgets, QtGui
+from resutls_view import ResultPage
+from PyQt6 import QtGui
 from PyQt6.QtGui import QFont
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtWidgets import *
+from threading import Thread
+from itertools import count
+from time import perf_counter
 
+from enum import Enum
 from pathlib import Path
 
 
 class MainWindow(QMainWindow):
+    class Page(Enum):
+        IDE = 0
+        RESULTS = 1
+        INFO = 2
+
     def __init__(self, constants=None):
         super().__init__()
 
         # Connect to the cluster server
         self.sock = User("localhost")
         self.sock.init_connection()
+        self.request_id = count()
 
         # Init constants
         if not constants:
@@ -50,21 +61,36 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(editor)
 
         # Additional
-        self.current_filepath = None
+        self.model = None
         self.tab_view = None
         self.sidebar = None
+        self.stacked = None
         self.splitter = None
+        self.results_view = None
         self.file_view = None
         self.file_manager = None
+        self.current_filepath = None
 
         self.setup_body()
         self.setup_menu()
+
+    @property
+    def current_request_id(self):
+        return next(self.request_id)
 
     @property
     def current_directory(self):
         if not self.current_filepath:
             return os.getcwd()
         return str(self.current_filepath.parent)
+
+    @property
+    def get_filename(self):
+        filename = self.current_filepath.stem
+        return self.results_view.get_title(filename)
+
+    def change_page(self, page):
+        self.stacked.setCurrentIndex(page.value)
 
     def create_editor(self, path=None):
         editor = CodeEditor(self, self.constants_json["editor"], path)
@@ -118,7 +144,7 @@ class MainWindow(QMainWindow):
         self.tab_view.setDocumentMode(True)
         self.tab_view.currentChanged.connect(self.change_tab)
         self.tab_view.tabCloseRequested.connect(self.close_tab)
-        size_policy = QtWidgets.QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        size_policy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         size_policy.setHorizontalStretch(0)
         size_policy.setVerticalStretch(0)
         size_policy.setHeightForWidth(self.tab_view.sizePolicy().hasHeightForWidth())
@@ -131,7 +157,7 @@ class MainWindow(QMainWindow):
 
         # Side bar
         self.sidebar = QFrame()
-        size_policy = QtWidgets.QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        size_policy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         size_policy.setHorizontalStretch(0)
         size_policy.setVerticalStretch(0)
         size_policy.setHeightForWidth(self.sidebar.sizePolicy().hasHeightForWidth())
@@ -149,7 +175,7 @@ class MainWindow(QMainWindow):
             color: {self.constants_json["sidebar"]["color"]};
             text-align: left;
             font-family: {self.constants_json["sidebar"]["button-font"]["family"]};
-            font-size: {self.constants_json["sidebar"]["button-font"]["font-weight"]}px;
+            font-size: {self.constants_json["sidebar"]["button-font"]["font-size"]}px;
             padding: {self.constants_json["sidebar"]["button-padding"]};
         }}
 
@@ -174,6 +200,11 @@ class MainWindow(QMainWindow):
         sidebar_vertical_layout.addWidget(menu_button)
         folder_button = self.add_sidebar_component("Folder", "sources/folder.png", self.toggle_file_view)
         sidebar_vertical_layout.addWidget(folder_button)
+        home_button = self.add_sidebar_component("Home", "sources/home.png", lambda: self.change_page(self.Page.IDE))
+        sidebar_vertical_layout.addWidget(home_button)
+        results_button = self.add_sidebar_component("Completed", "sources/completed.png",
+                                                    lambda: self.change_page(self.Page.RESULTS))
+        sidebar_vertical_layout.addWidget(results_button)
         search_button = self.add_sidebar_component("Search", "sources/search.png", lambda: None)
         sidebar_vertical_layout.addWidget(search_button)
         run_button = self.add_sidebar_component("Run", "sources/run.png", self.run_file)
@@ -182,7 +213,6 @@ class MainWindow(QMainWindow):
         sidebar_vertical_layout.addItem(spacer)
 
         # File manager
-
         self.file_view = QFrame()
         self.file_view.setMaximumSize(QSize(*self.constants_json["file-view"]["sizes"]["max"]))
         self.file_view.setMinimumSize(QSize(*self.constants_json["file-view"]["sizes"]["min"]))
@@ -203,11 +233,19 @@ class MainWindow(QMainWindow):
         file_view_layout.addWidget(self.file_manager)
         file_view_layout.setObjectName("file_view_layout")
 
-        # Setup widgets
+        # Results page
+        self.results_view = ResultPage(self.constants_json["list-view"])
+
+        # Setup container widgets
+        self.stacked = QStackedWidget()
+        self.stacked.addWidget(self.tab_view)
+        self.stacked.addWidget(self.results_view)
+        self.stacked.setCurrentIndex(1)
+
         self.splitter = QSplitter(self)
         self.splitter.addWidget(self.sidebar)
         self.splitter.addWidget(self.file_view)
-        self.splitter.addWidget(self.tab_view)
+        self.splitter.addWidget(self.stacked)
         self.splitter.setChildrenCollapsible(True)
         self.splitter.setHandleWidth(0)
         size_policy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -220,10 +258,10 @@ class MainWindow(QMainWindow):
     def add_sidebar_component(self, name, icon_path, function):
         icon = QtGui.QIcon()
         icon.addPixmap(QtGui.QPixmap(icon_path), QtGui.QIcon.Mode.Normal, QtGui.QIcon.State.Off)
-        push_button = QtWidgets.QPushButton(parent=self.sidebar)
+        push_button = QPushButton(parent=self.sidebar)
         push_button.setIcon(icon)
         push_button.setIconSize(QSize(*self.constants_json["sidebar"]["sizes"]["icon"]))
-        push_button.setText(" " * 3 + name)
+        push_button.setText(" " * 4 + name)
         push_button.clicked.connect(function)
 
         return push_button
@@ -348,9 +386,24 @@ class MainWindow(QMainWindow):
         self.current_filepath.write_text(program)
 
     def run_file(self):
+        request_id = self.current_request_id
         if self.current_filepath:
             with open(self.current_filepath) as file:
-                self.sock.send_input_file(file.read())
+                code = file.read()
+                self.sock.send_input_file(code)
+                Thread(target=lambda: self.exec_file(code, request_id)).start()
+            Thread(target=lambda: self.await_result(request_id)).start()
+
+    def await_result(self, request_id):
+        output = self.sock.recv_final_output()
+        self.results_view.cluster_result(self.get_filename, request_id, *output)
+
+    def exec_file(self, code, request_id):
+        start_time = perf_counter()
+        exec(code, {'builtins': globals()['__builtins__']})
+        finish_time = perf_counter()
+        runtime = finish_time - start_time
+        self.results_view.user_result(request_id, runtime)
 
     def show_dialog(self, title, text):
         dialog = QMessageBox(self)

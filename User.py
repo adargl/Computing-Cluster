@@ -1,5 +1,7 @@
 from Client import BaseClient
 from Logger import CustomFormatter
+from struct import unpack
+from pickle import loads
 import logging
 
 
@@ -14,6 +16,18 @@ class User(BaseClient):
 
     def send_input_file(self, file):
         self.send_msg(self.conn_sock, self.Actions.USER_INPUT_FILE, file)
+
+    def recv_final_output(self):
+        raw_header = self.recv_limited_bytes(self.conn_sock, 16)
+        if not raw_header:
+            return None
+        status_len, runtime_len, result_len, communication_len = unpack('>4I', raw_header)
+        status = loads(self.recv_limited_bytes(self.conn_sock, status_len))
+        runtime = loads(self.recv_limited_bytes(self.conn_sock, runtime_len))
+        result = loads(self.recv_limited_bytes(self.conn_sock, result_len))
+        communication = loads(self.recv_limited_bytes(self.conn_sock, communication_len))
+
+        return status, runtime, result, communication
 
     def connect_as_user(self):
         super().connect_as_user()

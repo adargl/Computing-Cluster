@@ -21,7 +21,7 @@ class FileManager(QTreeView):
 
         # Font
         self.main_font = QFont(
-            self.constants["font"].get("family", "Consolas"),
+            self.constants["font"].get("family", "calibri"),
             self.constants["font"].get("font-size", 12),
             QFont.Weight.Normal,
             self.constants["font"].get("italic", False)
@@ -29,7 +29,7 @@ class FileManager(QTreeView):
         self.setFont(self.main_font)
 
         self.model: QFileSystemModel = QFileSystemModel()
-        self.model.setReadOnly(False)
+        self.model.setReadOnly(True)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         cwd_path = Path(os.getcwd())
         parent_dir = str(cwd_path.parent.parent)

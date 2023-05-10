@@ -1,4 +1,9 @@
 import hashlib
+import binascii
+
+
+def binary_form_of_hash(hash):
+    return ''.join(format(byte, '08b') for byte in binascii.unhexlify(hash))
 
 
 def get_hash(string):
@@ -21,8 +26,9 @@ def find_nonce(block_header, difficulty):
         hash_result = get_hash(input_str_with_nonce)
 
         ...
+
         # Check if the hash meets the difficulty requirement
-        if hash_result.startswith('0' * difficulty):
+        if binary_form_of_hash(hash_result).startswith('0' * difficulty):
             return nonce, hash_result
 
         nonce += 1

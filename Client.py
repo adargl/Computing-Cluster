@@ -17,7 +17,7 @@ class BaseClient:
         CONNECT_AS_NODE = 8
         CONNECT_AS_USER = 9
         USER_INPUT_FILE = 10
-        CHANGE_TEMPLATE = 11
+        FINAL_RESPONSE = 11
         UNDEFINED_CODE = 12
 
     def __init__(self, server_port=55555, send_format="utf-8", buffer_size=1024):
