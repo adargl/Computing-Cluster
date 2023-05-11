@@ -15,6 +15,9 @@ class Mediator(BaseClient):
     def send_request(self, template_id, params):
         self.send_msg(self.conn_sock, self.Actions.PROCESSING_REQUEST, params, template_id)
 
+    def send_while_request(self, template_id, params):
+        self.send_msg(self.conn_sock, self.Actions.WHILE_PROCESSING_REQUEST, params, template_id)
+
     def get_results(self, task_id):
         self.send_msg(self.conn_sock, self.Actions.GET_RESULTS_REQUEST, None, task_id)
         action, optional, reserved, response = self.recv_msg(self.conn_sock)

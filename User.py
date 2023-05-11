@@ -46,6 +46,6 @@ logger.addHandler(stream_handler)
 if __name__ == '__main__':
     client = User("localhost")
     client.init_connection()
-    file_name = "Examples/BlockChainMining.py"
+    file_name = "Examples/Crisper.py"
     with open(file_name) as f:
         client.send_input_file(f.read())

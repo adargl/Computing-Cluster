@@ -44,15 +44,16 @@ class Node(BaseClient):
                     break
 
     def thread_failure(func):
-        def wrapper(self, *args, call_count=0, max_calls=3, **kwargs):
+        def wrapper(self, *args, call_count=0, max_calls=2, **kwargs):
             try:
                 func(self, *args, **kwargs)
             except Exception as e:
-                logger.error(f"[ERROR ENCOUNTERED] attempt {call_count + 1} raised: {e}")
-                if call_count < max_calls:
+                logger.warning(f"[ERROR ENCOUNTERED] attempt {call_count + 1} raised: {e}")
+                if call_count + 1 < max_calls:
                     wrapper(self, *args, call_count=call_count + 1, max_calls=max_calls, **kwargs)
                 else:
-                    logger.critical("[ERROR ENCOUNTERED] passed the allowed amount of function calls")
+                    self.send_msg(self.conn_sock, self.Actions.TASK_FAILED, *args)
+                    logger.error("[ERROR ENCOUNTERED] passed the allowed amount of function calls")
         return wrapper
 
     @thread_failure

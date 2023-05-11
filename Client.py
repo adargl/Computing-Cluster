@@ -8,17 +8,19 @@ class BaseClient:
     class Actions(Enum):
         RESERVED = 0
         PROCESSING_REQUEST = 1
-        PROCESSING_RESPONSE = 2
-        GET_RESULTS_REQUEST = 3
-        NODE_AVAILABLE = 4
-        SEND_TASK_TO_NODE = 5
-        TASK_RESPONSE = 6
-        CONNECT_AS_MEDIATOR = 7
-        CONNECT_AS_NODE = 8
-        CONNECT_AS_USER = 9
-        USER_INPUT_FILE = 10
-        FINAL_RESPONSE = 11
-        UNDEFINED_CODE = 12
+        WHILE_PROCESSING_REQUEST = 2
+        PROCESSING_RESPONSE = 3
+        GET_RESULTS_REQUEST = 4
+        NODE_AVAILABLE = 5
+        SEND_TASK_TO_NODE = 6
+        TASK_RESPONSE = 7
+        TASK_FAILED = 8
+        CONNECT_AS_MEDIATOR = 9
+        CONNECT_AS_NODE = 10
+        CONNECT_AS_USER = 11
+        USER_INPUT_FILE = 12
+        FINAL_RESPONSE = 13
+        UNDEFINED_CODE = 14
 
     def __init__(self, server_port=55555, send_format="utf-8", buffer_size=1024):
         self.server_ip = socket.gethostbyname(socket.gethostname())
