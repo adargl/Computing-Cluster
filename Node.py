@@ -1,3 +1,4 @@
+import ast
 import concurrent.futures
 from threading import Semaphore
 from Client import BaseClient
@@ -12,14 +13,13 @@ class ExecutableTree:
         self.params_name = params_name
         self.params = params
 
-    def exec_tree(self, file_name=''):
-        exec(compile(self.tree, file_name, 'exec'), {self.params_name: self.params})
+    def exec_tree(self):
+        exec(ast.unparse(self.tree), {self.params_name: self.params})
 
 
 class Node(BaseClient):
-    def __init__(self, server_ip, max_threads=1, server_port=55555, send_format="utf-8", buffer_size=1024):
-        super().__init__(server_port, send_format, buffer_size)
-        self.server_ip = server_ip
+    def __init__(self, server_ip="localhost", max_threads=1, server_port=55555, send_format="utf-8", buffer_size=1024):
+        super().__init__(server_ip, server_port, send_format, buffer_size)
         self.max_threads = max_threads
         self.semaphore = Semaphore(max_threads)
 

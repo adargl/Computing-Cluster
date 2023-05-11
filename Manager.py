@@ -457,10 +457,13 @@ class ClusterModifier(ast.NodeTransformer):
             )
             loop.node.body.extend(self.manually_marked_nodes)
         else:
-            for_node = self.while_processing_request
-            for_node.body.extend(self.manually_marked_nodes)
-            loop.node.body = [for_node]
+            # for_node = self.while_processing_request
+            # for_node.body.extend(self.manually_marked_nodes)
+            # loop.node.body = [for_node]
+            # loop.node.body.extend((self.get_results, *self.assign_results_nodes(self.current_params)))
+            loop.node.body = [self.normal_processing_request]
             loop.node.body.extend((self.get_results, *self.assign_results_nodes(self.current_params)))
+            loop.node.body.extend(self.manually_marked_nodes)
 
     def setup_threads(self):
         sorted_by_container = dict()
@@ -1243,8 +1246,8 @@ class ExecutableTree:
         self.params_name = params_name
         self.params = params
 
-    def exec_tree(self, file_name=''):
-        exec(compile(self.tree, file_name, 'exec'), {self.params_name: self.params})
+    def exec_tree(self):
+        exec(ast.unparse(self.tree), {self.params_name: self.params})
 
 
 def str_to_ast_node(string: str):

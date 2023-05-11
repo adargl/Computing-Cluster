@@ -5,7 +5,7 @@ import logging
 
 class Mediator(BaseClient):
     def __init__(self, server_port=55555, send_format="utf-8", buffer_size=1024):
-        super().__init__(server_port, send_format, buffer_size)
+        super().__init__(server_port=server_port, send_format=send_format, buffer_size=buffer_size)
         self.init_connection()
 
     def init_connection(self):

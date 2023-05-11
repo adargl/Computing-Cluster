@@ -22,8 +22,8 @@ class BaseClient:
         FINAL_RESPONSE = 13
         UNDEFINED_CODE = 14
 
-    def __init__(self, server_port=55555, send_format="utf-8", buffer_size=1024):
-        self.server_ip = socket.gethostbyname(socket.gethostname())
+    def __init__(self, server_ip="localhost", server_port=55555, send_format="utf-8", buffer_size=1024):
+        self.server_ip = server_ip
         self.server_port = server_port
         self.server_addr = (self.server_ip, self.server_port)
         self.format = send_format

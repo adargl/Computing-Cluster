@@ -6,9 +6,8 @@ import logging
 
 
 class User(BaseClient):
-    def __init__(self, server_ip, server_port=55555, send_format="utf-8", buffer_size=1024):
-        super().__init__(server_port, send_format, buffer_size)
-        self.server_ip = server_ip
+    def __init__(self, server_ip="localhost", server_port=55555, send_format="utf-8", buffer_size=1024):
+        super().__init__(server_ip, server_port, send_format, buffer_size)
 
     def init_connection(self):
         super().init_connection()
