@@ -22,13 +22,14 @@ class MainWindow(QMainWindow):
         RESULTS = 1
         INFO = 2
 
-    def __init__(self, constants=None):
+    def __init__(self, server_ip="localhost", constants=None):
         super().__init__()
 
         # Connect to the cluster server
-        self.sock = User("localhost")
-        self.sock.init_connection()
+        self.server_ip = server_ip
         self.request_id = count()
+        self.sock = User(server_ip)
+        self.sock.init_connection()
 
         # Init constants
         if not constants:
@@ -45,7 +46,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(self.window_title)
         self.resize(*self.constants_json["main-window"]["sizes"]["base"])
         self.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
-        self.setStyleSheet(open("./main_style.qss", "r").read())
+        self.setStyleSheet(open("style.qss", "r").read())
 
         # Font
         self.main_font = QFont(
@@ -67,6 +68,7 @@ class MainWindow(QMainWindow):
         self.stacked = None
         self.splitter = None
         self.results_view = None
+        self.run_button = None
         self.file_view = None
         self.file_manager = None
         self.current_filepath = None
@@ -207,8 +209,8 @@ class MainWindow(QMainWindow):
         sidebar_vertical_layout.addWidget(results_button)
         search_button = self.add_sidebar_component("Search", "sources/search.png", lambda: None)
         sidebar_vertical_layout.addWidget(search_button)
-        run_button = self.add_sidebar_component("Run", "sources/run.png", self.run_file)
-        sidebar_vertical_layout.addWidget(run_button)
+        self.run_button = self.add_sidebar_component("Run", "sources/run.png", self.run_file)
+        sidebar_vertical_layout.addWidget(self.run_button)
         spacer = QSpacerItem(20, 40, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
         sidebar_vertical_layout.addItem(spacer)
 
@@ -386,6 +388,7 @@ class MainWindow(QMainWindow):
         self.current_filepath.write_text(program)
 
     def run_file(self):
+        self.run_button.setEnabled(False)
         request_id = self.current_request_id
         if self.current_filepath:
             with open(self.current_filepath) as file:
@@ -393,10 +396,13 @@ class MainWindow(QMainWindow):
                 self.sock.send_input_file(code)
                 Thread(target=lambda: self.exec_file(code, request_id)).start()
             Thread(target=lambda: self.await_result(request_id)).start()
+        else:
+            self.run_button.setEnabled(True)
 
     def await_result(self, request_id):
         output = self.sock.recv_final_output()
         self.results_view.cluster_result(self.get_filename, request_id, *output)
+        self.run_button.setEnabled(True)
 
     def exec_file(self, code, request_id):
         start_time = perf_counter()
@@ -420,6 +426,6 @@ class MainWindow(QMainWindow):
 
 if __name__ == '__main__':
     app = QApplication([])
-    window = MainWindow()
+    window = MainWindow("localhost")
     window.show()
     app.exec()

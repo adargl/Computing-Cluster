@@ -63,21 +63,6 @@ class ResultTree(QTreeView):
         size_policy.setHeightForWidth(self.sizePolicy().hasHeightForWidth())
         self.setSizePolicy(size_policy)
 
-        # self.info_display_label = QLabel()
-        # font = QFont(
-        #     self.constants["alternative-font"].get("family", "calibri"),
-        #     self.constants["alternative-font"].get("font-size", 12),
-        #     QFont.Weight.Normal,
-        #     self.constants["alternative-font"].get("italic", False)
-        # )
-        # self.info_display_label.setFont(font)
-        # self.info_display_label.setStyleSheet(f'''
-        # QLabel {{
-        #     color: {self.constants["alternative-color"]};
-        # }}''')
-        # self.info_display_label.setWordWrap(True)
-
-        # self.clicked.connect(self.on_item_clicked)
         layout = QVBoxLayout()
         self.setLayout(layout)
 
@@ -143,12 +128,12 @@ class ResultTree(QTreeView):
         return [current_result['status']]
 
     def handle_runtime(self, current_result):
-        seconds = "seconds(s)"
+        seconds = "second(s)"
         user_runtime = current_result.get('user_runtime')
         runtime = current_result.get('runtime')
         item1 = f"Cluster finished in {runtime} {seconds}"
         if user_runtime == Status.ONGOING:
-            item2 = f"Control run is {user_runtime.value}"
+            item2 = f"Control run is still {user_runtime.value}"
             return [item1, item2]
         elif user_runtime:
             item2 = f"Control run finished in {user_runtime} {seconds}"
@@ -244,7 +229,7 @@ class ResultPage(QFrame):
         self.add_result(index, *results)
 
     def user_result(self, index, runtime):
-        currently_displayed = self.list_view.currentIndex().row == index
+        currently_displayed = self.list_view.currentIndex().row() == index
         self.tree.add_user_runtime(index, runtime, currently_displayed)
 
     def add_result(self, index, *result):

@@ -44,16 +44,19 @@ class Node(BaseClient):
                     break
 
     def thread_failure(func):
-        def wrapper(self, *args, call_count=0, max_calls=2, **kwargs):
+        def wrapper(self, *args, is_root=True, call_count=0, max_calls=2, **kwargs):
             try:
                 func(self, *args, **kwargs)
             except Exception as e:
                 logger.warning(f"[ERROR ENCOUNTERED] attempt {call_count + 1} raised: {e}")
                 if call_count + 1 < max_calls:
-                    wrapper(self, *args, call_count=call_count + 1, max_calls=max_calls, **kwargs)
+                    wrapper(self, *args, is_root=False, call_count=call_count + 1, max_calls=max_calls, **kwargs)
                 else:
                     self.send_msg(self.conn_sock, self.Actions.TASK_FAILED, *args)
                     logger.error("[ERROR ENCOUNTERED] passed the allowed amount of function calls")
+            finally:
+                if is_root:
+                    self.declare_ready()
         return wrapper
 
     @thread_failure
@@ -63,7 +66,6 @@ class Node(BaseClient):
             logger.info(f"[DATA RECEIVED] request  (id={template_id}): {params}")
             executable_tree.exec_tree()
             self.send_response(template_id, task_id, params)
-            self.declare_ready()
 
     def declare_ready(self):
         self.send_msg(self.conn_sock, self.Actions.NODE_AVAILABLE, self.max_threads)

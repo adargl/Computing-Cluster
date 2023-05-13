@@ -1,9 +1,10 @@
 import hashlib
 import binascii
 
-
-def binary_form_of_hash(hash):
-    return ''.join(format(byte, '08b') for byte in binascii.unhexlify(hash))
+def binary_form_of_hash(hash_value):
+    if not hash_value:
+        return '1'
+    return ''.join(format(byte, '08b') for byte in binascii.unhexlify(hash_value))
 
 
 def get_hash(string):
@@ -16,9 +17,9 @@ def find_nonce(block_header, difficulty):
 
     # Start with a nonce of 0
     nonce = 0
-    hash_result = None
+    hash_result = 0
 
-    while True:
+    while not binary_form_of_hash(hash_result).startswith('0' * difficulty):
         # Add the nonce to the input string
         input_str_with_nonce = input_str + str(nonce)
 
@@ -26,15 +27,11 @@ def find_nonce(block_header, difficulty):
         hash_result = get_hash(input_str_with_nonce)
 
         ...
-
-        # Check if the hash meets the difficulty requirement
-        if binary_form_of_hash(hash_result).startswith('0' * difficulty):
-            return nonce, hash_result
-
         nonce += 1
 
+    return nonce, hash_result
 
-# Sample block header
+
 block_header = {
     "previous_block_hash": "0000000000000000000000000000000000000000000000000000000000000000",
     "transactions": ["transaction_1", "transaction_2", "transaction_3"],
@@ -45,8 +42,8 @@ block_header = {
 difficulty = 4
 
 # Find nonce and hash value
-nonce, hash_value = find_nonce(block_header, difficulty)
+nonce_val, hash_val = find_nonce(block_header, difficulty)
 
 # Print results
-print("Nonce found: {}".format(nonce))
-print("Hash value: {}".format(hash_value))
+print("Nonce found: {}".format(nonce_val))
+print("Hash value: {}".format(hash_val))
