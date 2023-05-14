@@ -100,7 +100,12 @@ class MainWindow(QMainWindow):
 
     def setup_menu(self):
         file_menu = self.menuBar().addMenu("File")
+        run_menu = self.menuBar().addMenu("Run")
 
+        new_action = QtGui.QAction("New", self)
+        new_action.setShortcut(QtGui.QKeySequence.StandardKey.New)
+        new_action.triggered.connect(self.empty_tab)
+        file_menu.addAction(new_action)
         open_action = QtGui.QAction("Open", self)
         open_action.setShortcut(QtGui.QKeySequence.StandardKey.Open)
         open_action.triggered.connect(self.open_file)
@@ -116,7 +121,7 @@ class MainWindow(QMainWindow):
         run_action = QtGui.QAction("Run", self)
         run_action.setShortcut("Ctrl+R")
         run_action.triggered.connect(self.run_file)
-        file_menu.addAction(run_action)
+        run_menu.addAction(run_action)
 
     def setup_body(self):
         # Main body
@@ -153,9 +158,7 @@ class MainWindow(QMainWindow):
         self.tab_view.setSizePolicy(size_policy)
         self.tab_view.setCurrentIndex(0)
         self.tab_view.setObjectName("tab_view")
-
-        editor = self.create_editor()
-        self.new_tab(editor)
+        self.empty_tab()
 
         # Side bar
         self.sidebar = QFrame()
@@ -198,18 +201,16 @@ class MainWindow(QMainWindow):
         sidebar_vertical_layout.setObjectName("sidebar_vertical_layout")
 
         # Sidebar labels
-        menu_button = self.add_sidebar_component("Menu", "sources/menu.png", self.toggle_sidebar)
+        menu_button = self.add_to_sidebar("Menu", "sources/menu.png", self.toggle_sidebar)
         sidebar_vertical_layout.addWidget(menu_button)
-        folder_button = self.add_sidebar_component("Folder", "sources/folder.png", self.toggle_file_view)
+        folder_button = self.add_to_sidebar("Folder", "sources/folder.png", self.toggle_file_view)
         sidebar_vertical_layout.addWidget(folder_button)
-        home_button = self.add_sidebar_component("Home", "sources/home.png", lambda: self.change_page(self.Page.IDE))
+        home_button = self.add_to_sidebar("Home", "sources/home.png", lambda: self.change_page(self.Page.IDE))
         sidebar_vertical_layout.addWidget(home_button)
-        results_button = self.add_sidebar_component("Completed", "sources/completed.png",
-                                                    lambda: self.change_page(self.Page.RESULTS))
+        results_button = self.add_to_sidebar("Completed", "sources/completed.png",
+                                             lambda: self.change_page(self.Page.RESULTS))
         sidebar_vertical_layout.addWidget(results_button)
-        search_button = self.add_sidebar_component("Search", "sources/search.png", lambda: None)
-        sidebar_vertical_layout.addWidget(search_button)
-        self.run_button = self.add_sidebar_component("Run", "sources/run.png", self.run_file)
+        self.run_button = self.add_to_sidebar("Run", "sources/run.png", self.run_file)
         sidebar_vertical_layout.addWidget(self.run_button)
         spacer = QSpacerItem(20, 40, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
         sidebar_vertical_layout.addItem(spacer)
@@ -242,7 +243,6 @@ class MainWindow(QMainWindow):
         self.stacked = QStackedWidget()
         self.stacked.addWidget(self.tab_view)
         self.stacked.addWidget(self.results_view)
-        self.stacked.setCurrentIndex(1)
 
         self.splitter = QSplitter(self)
         self.splitter.addWidget(self.sidebar)
@@ -257,7 +257,7 @@ class MainWindow(QMainWindow):
         self.splitter.setSizePolicy(size_policy)
         self.setCentralWidget(self.splitter)
 
-    def add_sidebar_component(self, name, icon_path, function):
+    def add_to_sidebar(self, name, icon_path, function):
         icon = QtGui.QIcon()
         icon.addPixmap(QtGui.QPixmap(icon_path), QtGui.QIcon.Mode.Normal, QtGui.QIcon.State.Off)
         push_button = QPushButton(parent=self.sidebar)
@@ -290,23 +290,23 @@ class MainWindow(QMainWindow):
             sizes[1], sizes[2] = max_width, sum(sizes) - max_width - sizes[0]
         self.splitter.setSizes(sizes)
 
+    def empty_tab(self):
+        editor = self.create_editor()
+        self.new_tab(editor)
+
     def new_tab(self, editor):
         self.tab_view.addTab(editor, editor.filename)
         self.setWindowTitle(self.filename_template.format(filename=editor.filename))
         self.tab_view.setCurrentIndex(self.tab_view.count() - 1)
 
-    def open_tab(self, path, is_new_file=False):
+    def open_tab(self, path):
         if path.is_dir():
             return
         editor = self.create_editor(path)
 
-        if is_new_file:
-            self.new_tab(editor)
-            self.current_filepath = path
-            return
-
         # check if file already open
-        for i in range(self.tab_view.count()):
+        amount_of_tabs = self.tab_view.count()
+        for i in range(amount_of_tabs):
             if self.tab_view.tabText(i) == path.name or self.tab_view.tabText(i) == "*" + path.name:
                 self.tab_view.setCurrentIndex(i)
                 self.current_filepath = path
@@ -317,6 +317,10 @@ class MainWindow(QMainWindow):
         editor.setText(path.read_text(encoding=self.encoding_type))
         self.setWindowTitle(f"{path.name} - {self.window_title}")
         self.current_filepath = path
+
+        current_editor = self.tab_view.currentWidget()
+        if amount_of_tabs == 1 and current_editor.first_launch and not current_editor.file_changed:
+            self.tab_view.removeTab(0)
         self.tab_view.setCurrentIndex(self.tab_view.count() - 1)
 
     def close_tab(self, index):
@@ -331,7 +335,7 @@ class MainWindow(QMainWindow):
                 return
 
         if self.tab_view.count() == 1:
-            self.new_tab(self.create_editor())
+            self.empty_tab()
         self.tab_view.removeTab(index)
 
     def change_tab(self):

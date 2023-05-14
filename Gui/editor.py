@@ -55,7 +55,7 @@ class CodeEditor(QsciScintilla):
         self.setCaretLineBackgroundColor(QColor(self.constants["caret-background-color"]))
 
         # EOL
-        self.setEolMode(QsciScintilla.EolMode.EolWindows)
+        self.setEolMode(QsciScintilla.EolMode.EolUnix)
         self.setEolVisibility(False)
 
         # Highlighted text

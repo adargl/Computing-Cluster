@@ -5,7 +5,7 @@
         "defaults": {
                 "color": "#abb2bf",
                 "paper": "#3A383E",
-                "font": ["Consolas", 14]
+                "font": ["consolas", 13]
         },
         "syntax": [
             {
@@ -14,7 +14,7 @@
                     "paper-color": "#3A383E",
                     "font": {
                         "family": "consolas",
-                        "font-size": 14,
+                        "font-size": 13,
                         "font-weight": "bold",
                         "italic": false
                     }
@@ -26,7 +26,7 @@
                     "paper-color": "#3A383E",
                     "font": {
                         "family": "consolas",
-                        "font-size": 14,
+                        "font-size": 13,
                         "font-weight": "bold",
                         "italic": false
                     }
@@ -38,7 +38,7 @@
                     "paper-color": "#3A383E",
                     "font": {
                         "family": "consolas",
-                        "font-size": 14,
+                        "font-size": 13,
                         "font-weight": "bold",
                         "italic": false
                     }
@@ -50,7 +50,7 @@
                     "paper-color": "#3A383E",
                     "font": {
                         "family": "consolas",
-                        "font-size": 14,
+                        "font-size": 13,
                         "font-weight": "bold",
                         "italic": false
                     }
@@ -62,7 +62,7 @@
                     "paper-color": "#3A383E",
                     "font": {
                         "family": "consolas",
-                        "font-size": 14,
+                        "font-size": 13,
                         "font-weight": "bold",
                         "italic": true
                     }

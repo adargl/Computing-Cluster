@@ -1,6 +1,10 @@
 QMainWindow {
-    background-color: #2E2E2E;
+    background-color: #363636;
     color: #e6e6ee
+}
+
+QMessageBox QLabel {
+    color: black;
 }
 
 QFrame {
@@ -24,7 +28,7 @@ QTabBar::tab {
 
 QTabBar::tab::selected {
     border-style: none;
-    color: #E6E6EE;
+    color: #e6e6ee;
     background-color: #585858;
     border-bottom: 2px solid #E6E6EE;
 }
@@ -99,7 +103,7 @@ QListView::item:hover,  QListView::item:hover:alternate{
 
 QLineEdit {
     background-color: transparent;
-    selection-background-color: #274E9D;
+    selection-background-color: #274e9d;
 }
 
 QLineEdit:focus {
@@ -110,4 +114,33 @@ QLabel {
     color: #e6e6ee;
     font-family: calibri;
     padding: 2px;
+}
+
+QMenuBar {
+    background-color: #2e2e2e;
+    border-bottom: 1px solid  #515151;
+    color: #ffffff;
+}
+
+QMenuBar::item {
+    padding: 4px 16px;
+    background-color: #2e2e2e;
+}
+
+QMenuBar::item:selected {
+    background-color: #4c4c4c;
+}
+
+QMenu {
+    background-color: #2e2e2e;
+    color: #ffffff;
+    border: 1px solid  #515151;
+}
+
+QMenu::item {
+    padding: 4px 24px;
+}
+
+QMenu::item:selected {
+    background-color: #4c4c4c;
 }

@@ -27,7 +27,6 @@ class FileManager(QTreeView):
             self.constants["font"].get("italic", False)
         )
         self.setFont(self.main_font)
-
         self.model: QFileSystemModel = QFileSystemModel()
         self.model.setReadOnly(True)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -43,27 +42,19 @@ class FileManager(QTreeView):
         self.setModel(self.model)
         parent_index = self.model.index(parent_dir)
         self.setRootIndex(parent_index)
-        self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.setSelectionBehavior(QTreeView.SelectionBehavior.SelectRows)
         self.setEditTriggers(QTreeView.EditTrigger.NoEditTriggers)
-        # addntext menu
-        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.customContextMenuRequested.connect(self.show_context_menu)
+
         # hank
         self.clicked.connect(self.tree_view_clicked)
         self.setIndentation(10)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        # Hidnd hide other columns except for name
-        self.setHeaderHidden(True)  # hiding header
+        # Hide other columns except for name
+        self.setHeaderHidden(True)
         self.setColumnHidden(1, True)
         self.setColumnHidden(2, True)
         self.setColumnHidden(3, True)
-
-        # enable drag and drop
-        self.setDragEnabled(True)
-        self.setAcceptDrops(True)
-        self.setDropIndicatorShown(True)
-        self.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
 
         # enable file name editing
 
@@ -83,35 +74,6 @@ class FileManager(QTreeView):
         p = Path(path)
         if p.is_file():
             self.set_new_tab(p)
-
-    def show_context_menu(self, pos: QPoint):
-        ix = self.indexAt(pos)
-        menu = QMenu()
-        menu.addAction("New File")
-        menu.addAction("New Folder")
-        menu.addAction("Open In File Manager")
-
-        if ix.column() == 0:
-            menu.addAction("Rename")
-            menu.addAction("Delete")
-
-        action = menu.exec(self.viewport().mapToGlobal(pos))
-
-        if not action:
-            return
-
-        if action.text() == "Rename":
-            self.action_rename(ix)
-        elif action.text() == "Delete":
-            self.action_delete(ix)
-        elif action.text() == "New Folder":
-            self.action_new_folder()
-        elif action.text() == "New File":
-            self.action_new_file(ix)
-        elif action.text() == "Open In File Manager":
-            self.action_open_in_file_manager(ix)
-        else:
-            pass
 
     def show_dialog(self, title, text) -> int:
         dialog = QMessageBox(self)
