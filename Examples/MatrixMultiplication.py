@@ -1,11 +1,13 @@
 import threading
 import random
 
+
 def multiply_chunk(matrix1, matrix2, start, end, result):
     """Multiplies a chunk of two matrices and stores the result in a shared result matrix"""
     for i in range(start, end):
         for j in range(len(matrix2[0])):
             result[i][j] = sum(matrix1[i][k] * matrix2[k][j] for k in range(len(matrix1[0])))
+
 
 def threaded_matrix_multiply(matrix1, matrix2):
     """Multiplies two matrices using threads"""
@@ -47,14 +49,14 @@ def threaded_matrix_multiply(matrix1, matrix2):
 
 
 # Create two matrices to multiply
-matrix1 = [[random.random() for _ in range(10)] for _ in range(20)]
-matrix2 = [[random.random() for _ in range(20)] for _ in range(10)]
+mat1 = [[random.random() for _ in range(10)] for _ in range(20)]
+mat2 = [[random.random() for _ in range(20)] for _ in range(10)]
 
 # Multiply the matrices using threads
-result = threaded_matrix_multiply(matrix1, matrix2)
+multiplied = threaded_matrix_multiply(mat1, mat2)
 
 # Print the result
-for row in result:
+for row in multiplied:
     print(row)
 
 

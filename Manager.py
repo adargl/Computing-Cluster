@@ -910,16 +910,18 @@ class ClusterServer:
                 with open(modified_file, 'w') as output_file:
                     output_file.write(modified_code)
                 modified_code = ast.parse(modified_code)
-                ClusterServer.exec_tree(self, modified_code)
+                try:
+                    ClusterServer.exec_tree(self, modified_code)
+                except Exception as e:
+                    ClusterServer.raise_exception("while executing the file encountered", e)
             else:
                 logger.warning(f"File is unbreakable")
 
         def add_request(self, template_id, params, while_request):
             if while_request:
                 self.currently_handling_while = True
-            else:
+            elif self.currently_handling_while:
                 self.currently_handling_while = False
-                self.init_id_to_task()
             self.task_queue.put((template_id, params))
 
         def get_request(self):
@@ -963,6 +965,7 @@ class ClusterServer:
 
         def update_result(self, original, params):
             new = {p: params[p] for p in original if p in params}
+
             if new:
                 response = self.results.get(self.template_id)
                 if not response:
@@ -972,7 +975,7 @@ class ClusterServer:
                         org_value, new_value = original.get(key), new.get(key)
                         if org_value is None or new_value is None:
                             continue
-                        elif not type(org_value) == type(new_value):
+                        elif not type(org_value) == type(new_value) == type(response[key]):
                             if new_value:
                                 response[key] = new_value
                         else:
@@ -1170,8 +1173,7 @@ class ClusterServer:
             try:
                 packet = sock.recv(n - len(data))
             except Exception as e:
-                logger.error(f"[ERROR ENCOUNTERED] while receiving a message encountered: {e}")
-
+                self.raise_exception("while receiving a message encountered", e)
             if not packet:
                 return None
             data.extend(packet)
@@ -1226,6 +1228,10 @@ class ClusterServer:
             socket_object.close()
             sock.node_failure()
         logger.info(f"[CONNECTION CLOSED] connection from {sock.ip}, {sock.port} had been closed")
+
+    @staticmethod
+    def raise_exception(additional_text, exception):
+        logger.error(f"[ERROR ENCOUNTERED] {additional_text}: {exception}")
 
     @classmethod
     def exec_tree(cls, sock, tree, file_name=''):

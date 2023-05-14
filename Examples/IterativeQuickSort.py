@@ -50,5 +50,5 @@ def sort_subarray(array, start, end):
 
 
 # Test the quick_sort function
-lst = list(map(lambda x: randint(1, 100), range(100)))
+lst = list(map(lambda x: randint(1, 100), range(50)))
 print(quick_sort(lst))

@@ -400,8 +400,9 @@ class MainWindow(QMainWindow):
             self.run_button.setEnabled(True)
 
     def await_result(self, request_id):
+        filename = self.get_filename
         output = self.sock.recv_final_output()
-        self.results_view.cluster_result(self.get_filename, request_id, *output)
+        self.results_view.cluster_result(filename, request_id, *output)
         self.run_button.setEnabled(True)
 
     def exec_file(self, code, request_id):
