@@ -12,24 +12,27 @@ class Status(Enum):
     COMPLETED = "completed"
 
 
-class CustomDelegate(QStyledItemDelegate):
-    def createEditor(self, parent, option, index):
-        editor = QLineEdit(parent)
-        editor.textChanged.connect(self.updateEditor)
-        return editor
+class Colors(Enum):
+    FAILED = ""
+    SUCCEEDED = "#5eaa38"
 
-    def updateEditor(self, index):
-        view = self.parent()
-        view.update(index)
+
+class CustomItemDelegate(QStyledItemDelegate):
+    def paint(self, painter, option, index):
+        item = index.data(Qt.ItemDataRole.UserRole)
+        if item and isinstance(item, Item):
+            if item.color:
+                option.palette.setColor(QtGui.QPalette.ColorRole.HighlightedText, QtGui.QColor(item.color))
+
+        super().paint(painter, option, index)
 
 
 class Item(QtGui.QStandardItem):
-    def __init__(self, name, index=None, result=None, info=None):
+    def __init__(self, name, index=None, color=None):
         super().__init__(name)
         self.name = name
         self.index = index
-        self.result = result
-        self.info = info
+        self.color = color
         self.setEditable(False)
 
 
@@ -41,6 +44,8 @@ class ResultTree(QTreeView):
         self.lock = Lock()
 
         self.model = QtGui.QStandardItemModel()
+        self.delegate = CustomItemDelegate()
+        self.setItemDelegate(self.delegate)
         self.setModel(self.model)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.header().hide()
@@ -120,7 +125,7 @@ class ResultTree(QTreeView):
             for _ in range(item.rowCount()):
                 item.takeRow(0)
             for i in values:
-                new_item = Item(i)
+                new_item = Item(i, color=Colors.SUCCEEDED)
                 new_item.setSelectable(False)
                 item.appendRow(new_item)
 
@@ -160,6 +165,38 @@ class ResultPage(QFrame):
 
         # List view
         self.list_view = QListView()
+        self.list_view.setStyleSheet('''
+        QListView {
+            background-color: transparent;
+            alternate-background-color: transparent;
+            font-family: calibri;
+            color: #b1b1b1;
+            border-style: none;
+            show-decoration-selected: 1;
+        }
+
+        QListView::item {
+            background-color: #41404A;
+            border-radius: 5px;
+            padding: 10px;
+            font-size: 16px;
+        }
+
+        QListView::item:alternate {
+            background-color: transparent;
+        }
+
+        QListView::item:selected,
+        QListView::item:selected:alternate {
+            color: #e6e6ee;
+            background-color: #504F5D;
+        }
+
+        QListView::item:hover,
+        QListView::item:hover:alternate {
+            border: 1px solid #e6e6ee;
+        }
+        ''')
         self.list_view.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.list_view.setAlternatingRowColors(True)
         self.list_view.setObjectName("list_view")

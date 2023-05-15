@@ -72,35 +72,6 @@ QTreeView::item:selected {
     color: #E6E6EE;
 }
 
-QListView {
-    background-color: transparent;
-    alternate-background-color: transparent;
-    font-family: calibri;
-    color: #b1b1b1;
-    border-style: none;
-    show-decoration-selected: 1;
-}
-
-QListView::item {
-    background-color: #41404A;
-    border-radius: 5px;
-    padding: 10px;
-    font-size: 16px;
-}
-
-QListView::item:alternate {
-    background-color: transparent;
-}
-
-QListView::item:selected, QListView::item:selected:alternate {
-    color: #e6e6ee;
-    background-color: #504F5D;
-}
-
-QListView::item:hover,  QListView::item:hover:alternate{
-    border: 1px solid #e6e6ee;
-}
-
 QLineEdit {
     background-color: transparent;
     selection-background-color: #274e9d;

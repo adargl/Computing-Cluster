@@ -947,6 +947,8 @@ class ClusterServer:
 
         def update_while_result(self, task_id, original, params):
             request_id = self.task_id_to_req_id.get(task_id)
+            if request_id is None:
+                raise RuntimeError
             self.id_to_task[request_id] = original, params
 
             while request_id < self.max_while_tasks and request_id == self.while_highest_handled_id:
@@ -955,6 +957,7 @@ class ClusterServer:
                     return
                 original, params = info
                 if not params.get(ClusterServer._condition_name, True):
+                    self.get_results = True
                     self.currently_handling_while = False
                     response = self.results.get(self.template_id)
                     response[ClusterServer._condition_name] = False
@@ -1090,8 +1093,9 @@ class ClusterServer:
                                     else:
                                         user_sock.update_result(original, params)
 
-                                if not user_sock.unhandled_requests == 0:
+                                if user_sock.unhandled_requests > 0:
                                     user_sock.unhandled_requests -= 1
+
                                 if user_sock.get_results and user_sock.task_queue.empty() \
                                         and user_sock.unhandled_requests == 0:
                                     self.user_result_queue.put(user_sock)

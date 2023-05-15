@@ -1,6 +1,7 @@
 import hashlib
 import binascii
 
+
 def binary_form_of_hash(hash_value):
     if not hash_value:
         return '1'
