@@ -528,7 +528,7 @@ class ClusterModifier(ast.NodeTransformer):
                                "is_custom_visit", "is_container_node", "visit_threads")
             self.create_template()
 
-    def custom_visit(self, obj):
+    def custom_modify(self, obj):
         enum_type = ObjectType(type(obj))
         method = 'modify_' + str(enum_type)
         visitor = getattr(self, method)
@@ -793,6 +793,7 @@ class ClusterServer:
             self.while_highest_handled_id = 0
             self._socket_is_handling_while = False
             self.get_results = False
+            self.user_sock = None
             self.id_to_task = None
             self.req_id = count()
             self.task_queue = queue.Queue()
@@ -887,8 +888,8 @@ class ClusterServer:
 
             self.connection_type = connection_type
 
-        def time_stamp_action(self, action):
-            self.time_stamps.append((time(), action))
+        def time_stamp_action(self, action, ip=None):
+            self.time_stamps.append((time(), action, ip if ip else self.ip))
 
         def handle_user_input(self, file):
             modified_file = "Modified.py"
@@ -910,10 +911,7 @@ class ClusterServer:
                 with open(modified_file, 'w') as output_file:
                     output_file.write(modified_code)
                 modified_code = ast.parse(modified_code)
-                try:
-                    ClusterServer.exec_tree(self, modified_code)
-                except Exception as e:
-                    ClusterServer.raise_exception("while executing the file encountered", e)
+                ClusterServer.exec_tree(self, modified_code)
             else:
                 logger.warning(f"File is unbreakable")
 
@@ -1207,6 +1205,7 @@ class ClusterServer:
                 task = user_sock.get_task(template_id, params)
                 task_id = node_sock.add_task(user_sock, params)
                 user_sock.map_task_id_to_req_id(task_id)
+                user_sock.time_stamp_action(self.Actions.SEND_TASK_TO_NODE, node_sock.ip)
                 self.send_msg(node_sock, self.Actions.SEND_TASK_TO_NODE, task, template_id, task_id)
 
     def handle_results(self):
@@ -1242,18 +1241,23 @@ class ClusterServer:
         start_time = perf_counter()
         std_out = StringIO()
         with redirect_stdout(std_out):
-            exec(compile(tree, file_name, 'exec'), {'builtins': globals()['__builtins__']})
+            try:
+                exec(compile(tree, file_name, 'exec'), {'builtins': globals()['__builtins__']})
+            except Exception as e:
+                ClusterServer.raise_exception("while executing the file encountered", e)
+                cls.send_final_output(sock, "Failed", "None", 0.0, "None")
+                return
+
         finish_time = perf_counter()
 
         # Remove the last char from the output since it is always '\n'
         output = std_out.getvalue()[:-1]
-        user_output = f"{'-' * 10}Final{'-' * 10}\n" + output \
-                      + f"\n{'-' * 12}+{'-' * 12}"
+        user_output = f"{'-' * 10}Final{'-' * 10}\n{output}\n{'-' * 12}+{'-' * 12}"
         runtime = finish_time - start_time
         logger.critical("[EXECUTION FINISHED] Program output:\n" + user_output
                         + f"\nfinished in {runtime} second(s)")
 
-        cls.send_final_output(sock, "Completed", user_output, runtime, "Empty")
+        cls.send_final_output(sock, "Completed", output, runtime, "Empty")
 
     @classmethod
     def send_final_output(cls, sock, status, result, runtime, communication):

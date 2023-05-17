@@ -3,7 +3,7 @@ import json
 from User import User
 from editor import CodeEditor
 from file_view import FileManager
-from resutls_view import ResultPage
+from result_view import ResultPage
 from PyQt6 import QtGui
 from PyQt6.QtGui import QFont
 from PyQt6.QtCore import Qt, QSize

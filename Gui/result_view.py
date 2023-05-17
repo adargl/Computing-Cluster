@@ -18,13 +18,34 @@ class Colors(Enum):
 
 
 class CustomItemDelegate(QStyledItemDelegate):
-    def paint(self, painter, option, index):
-        item = index.data(Qt.ItemDataRole.UserRole)
-        if item and isinstance(item, Item):
-            if item.color:
-                option.palette.setColor(QtGui.QPalette.ColorRole.HighlightedText, QtGui.QColor(item.color))
+    def initStyleOption(self, option, index):
+        super().initStyleOption(option, index)
 
-        super().paint(painter, option, index)
+        level = self.get_item_level(index)
+        if level == 2:
+            item = self.get_item(index)
+            color = QtGui.QColor(item.color)
+            option.palette.setColor(option.palette.ColorRole.Text, color)
+
+    def sizeHint(self, option, index):
+        desired_padding = 12
+        size = super().sizeHint(option, index)
+        level = self.get_item_level(index)
+
+        if level == 1:
+            size.setHeight(size.height() + desired_padding)
+
+        return size
+
+    def get_item(self, index):
+        return index.model().itemFromIndex(index)
+
+    def get_item_level(self, index):
+        level = 1
+        while index.parent().isValid():
+            index = index.parent()
+            level += 1
+        return level
 
 
 class Item(QtGui.QStandardItem):
@@ -32,7 +53,7 @@ class Item(QtGui.QStandardItem):
         super().__init__(name)
         self.name = name
         self.index = index
-        self.color = color
+        self.color = color.value if color else None
         self.setEditable(False)
 
 
@@ -83,11 +104,11 @@ class ResultTree(QTreeView):
         QTreeView::item {
             background-color: transparent;
             border-radius: 5px;
-            padding: 10px;
+            padding: 4px;
         }
 
         QTreeView::item:hover{
-            color: #e6e6ee;
+            color: none;
         }''')
 
     def add_user_runtime(self, index, runtime, currently_displayed):
@@ -133,16 +154,16 @@ class ResultTree(QTreeView):
         return [current_result['status']]
 
     def handle_runtime(self, current_result):
-        seconds = "second(s)"
+        seconds = "secs"
         user_runtime = current_result.get('user_runtime')
         runtime = current_result.get('runtime')
-        item1 = f"Cluster finished in {runtime} {seconds}"
+        item1 = f"{runtime} {seconds} on Cluster"
         if user_runtime == Status.ONGOING:
             item2 = f"Control run is still {user_runtime.value}"
             return [item1, item2]
         elif user_runtime:
-            item2 = f"Control run finished in {user_runtime} {seconds}"
-            item3 = f"Saved a total time of {user_runtime - runtime} {seconds}"
+            item2 = f"{user_runtime} {seconds} Control Run"
+            item3 = f"{user_runtime - runtime} {seconds} saved in total"
             return [item1, item2, item3]
         else:
             return [item1]
