@@ -19,7 +19,7 @@ QTabWidget {
 
 
 QTabBar::tab {
-    background-color: #2d2d2d;
+    background-color: #363636;
     color: #E6E6EE;
     max-height: 6ex;
     padding: 10px 10px;

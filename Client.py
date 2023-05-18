@@ -58,8 +58,8 @@ class BaseClient:
             data.extend(packet)
         return data
 
-    def connect_as_mediator(self):
-        self.send_msg(self.conn_sock, self.Actions.CONNECT_AS_MEDIATOR)
+    def connect_as_mediator(self, user_sock_id):
+        self.send_msg(self.conn_sock, self.Actions.CONNECT_AS_MEDIATOR, user_sock_id)
 
     def connect_as_user(self):
         self.send_msg(self.conn_sock, self.Actions.CONNECT_AS_USER)

@@ -13,8 +13,10 @@ class Status(Enum):
 
 
 class Colors(Enum):
-    FAILED = ""
-    SUCCEEDED = "#5eaa38"
+    NORMAL = "#868079"
+    FAILURE = "#DE463C"
+    WARNING = "#937907"
+    SUCCESS = "#678420"
 
 
 class CustomItemDelegate(QStyledItemDelegate):
@@ -28,7 +30,7 @@ class CustomItemDelegate(QStyledItemDelegate):
             option.palette.setColor(option.palette.ColorRole.Text, color)
 
     def sizeHint(self, option, index):
-        desired_padding = 12
+        desired_padding = 15
         size = super().sizeHint(option, index)
         level = self.get_item_level(index)
 
@@ -104,7 +106,7 @@ class ResultTree(QTreeView):
         QTreeView::item {
             background-color: transparent;
             border-radius: 5px;
-            padding: 4px;
+            padding: 2px;
         }
 
         QTreeView::item:hover{
@@ -135,23 +137,37 @@ class ResultTree(QTreeView):
         with self.lock:
             self.all_results[index] = new_result
 
+    def add_failed(self, index):
+        self.all_results[index] = {'status': False}
+
     def display_result(self, index):
         with self.lock:
             current_result = self.all_results[index]
+
+        execution_failed = False
+        execution_status = current_result['status']
         for item, function in [(self.exec_status, self.handle_status), (self.runtime_info, self.handle_runtime),
                                (self.final_result, self.handle_results),
                                (self.communication, self.handle_communication)]:
 
-            values = function(current_result)
+            values = function(current_result) if not execution_failed else []
             for _ in range(item.rowCount()):
                 item.takeRow(0)
             for i in values:
-                new_item = Item(i, color=Colors.SUCCEEDED)
+                color = Colors.NORMAL
+                if isinstance(i, tuple):
+                    i, color = i
+                new_item = Item(i, color=color)
                 new_item.setSelectable(False)
                 item.appendRow(new_item)
 
+            if not execution_status:
+                execution_failed = True
+
     def handle_status(self, current_result):
-        return [current_result['status']]
+        bool_value = current_result['status']
+        item = ("Execution completed", Colors.SUCCESS) if bool_value else ("Execution rejected", Colors.WARNING)
+        return [item]
 
     def handle_runtime(self, current_result):
         seconds = "secs"
@@ -163,7 +179,9 @@ class ResultTree(QTreeView):
             return [item1, item2]
         elif user_runtime:
             item2 = f"{user_runtime} {seconds} Control Run"
-            item3 = f"{user_runtime - runtime} {seconds} saved in total"
+            time_saved = user_runtime - runtime
+            item3 = f"{time_saved} {seconds} saved in total"
+            item3 = (item3, Colors.SUCCESS) if time_saved > 0 else (item3, Colors.FAILURE)
             return [item1, item2, item3]
         else:
             return [item1]
@@ -172,7 +190,9 @@ class ResultTree(QTreeView):
         return [current_result['results']]
 
     def handle_communication(self, current_result):
-        return [current_result['communication']]
+        nodes_info = current_result['communication']
+        template = "{ip} executed approximately {task_amount} task(s)"
+        return [template.format(ip=ip, task_amount=task_amount) for ip, task_amount in nodes_info.items()]
 
 
 class ResultPage(QFrame):
@@ -278,13 +298,16 @@ class ResultPage(QFrame):
         self.info_header_label.setText(f"{self.header_label_value} - {item.name}")
         self.display_result(index.row())
 
-    def cluster_result(self, text, index, *results):
+    def cluster_result(self, text, index, *results, execution_failed=False):
         if self.initial_item:
             self.model.clear()
             self.initial_item = False
         item = Item(text, index)
         self.model.appendRow(item)
-        self.add_result(index, *results)
+        if not execution_failed:
+            self.add_result(index, *results)
+        else:
+            self.add_failed(index)
 
     def user_result(self, index, runtime):
         currently_displayed = self.list_view.currentIndex().row() == index
@@ -292,6 +315,9 @@ class ResultPage(QFrame):
 
     def add_result(self, index, *result):
         self.tree.add_result(index, *result)
+
+    def add_failed(self, index):
+        self.tree.add_failed(index)
 
     def display_result(self, index=None):
         if index is None:

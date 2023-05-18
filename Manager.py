@@ -112,10 +112,11 @@ class ClusterVisitor(ast.NodeVisitor):
         def set_join_call(self, call_node, container):
             self.join_call = ClusterVisitor.Node(call_node, container)
 
-    def __init__(self, condition_name, parameters_name="params"):
+    def __init__(self, condition_name, parameters_name="params", user_sock_id="user_sock_id"):
         self.names = {"parameters": parameters_name, "mediator_class": "Mediator", "mediator_object": "cluster",
                       "processing_request": "send_request", "while_processing_request": "send_while_request",
-                      "template_change": "template_change", "await": "get_results", "condition": condition_name}
+                      "template_change": "template_change", "await": "get_results", "condition": condition_name,
+                      "user_sock_id": user_sock_id}
         self.module_node = None
 
         self.current_func = self.Function.empty_instance()
@@ -401,13 +402,16 @@ class ClusterModifier(ast.NodeTransformer):
         count = 0
         # Import the mediator class
         new_import_node = str_to_ast_node(
-            f"from {self.names['mediator_class']} import {self.names['mediator_class']}")
+            f"from {self.names['mediator_class']} import {self.names['mediator_class']}"
+        )
         module_node.body.insert(count, new_import_node)
 
         # Create and inject the mediator object
         while isinstance(module_node.body[count], (ast.FunctionDef, ast.Import, ast.ImportFrom)):
             count += 1
-        new_obj_node = str_to_ast_node(f"{self.names['mediator_object']} = {self.names['mediator_class']}()")
+        new_obj_node = str_to_ast_node(
+            f"{self.names['mediator_object']} = {self.names['mediator_class']}({self.names['user_sock_id']})"
+        )
         module_node.body.insert(count, new_obj_node)
 
     def setup_loop(self, loop):
@@ -737,6 +741,7 @@ class ObjectType(Enum):
 class ClusterServer:
     _condition_name = "condition"
     _parameters_name = "params"
+    _user_sock_id = "user_id"
 
     class Actions(Enum):
         RESERVED = 0
@@ -793,13 +798,13 @@ class ClusterServer:
             self.while_highest_handled_id = 0
             self._socket_is_handling_while = False
             self.get_results = False
-            self.user_sock = None
             self.id_to_task = None
             self.req_id = count()
             self.task_queue = queue.Queue()
 
             # If connection_type is User
-            ...
+            self.user_id = 0
+            self.mediator_sock = None
 
             logger.info(f"[CONNECTION ESTABLISHED] connection has been established from {ip}, {port}")
 
@@ -846,9 +851,10 @@ class ClusterServer:
                 new_id = 0
             self.task_id_to_req_id[task_id] = new_id
 
-        def set_connection_type(self, connection_type):
+        def set_connection_type(self, connection_type, user_id=0):
             def clear_user_data():
-                pass
+                self.user_id = 0
+                self.mediator_sock = None
 
             def clear_node_data():
                 self.hash_to_sock.clear()
@@ -879,6 +885,7 @@ class ClusterServer:
             elif connection_type == ClusterServer.Actions.CONNECT_AS_USER:
                 clear_mediator_data()
                 clear_node_data()
+                self.user_id = user_id
             else:
                 logger.error(
                     f"[CONNECTION DENIED] connection must be of type {ClusterServer.ConnectionStatus.NODE.value}, "
@@ -896,7 +903,8 @@ class ClusterServer:
             byproduct_file = "Created.py"
             ast_tree = ast.parse(file)
 
-            visitor = ClusterVisitor(ClusterServer._condition_name, ClusterServer._parameters_name)
+            cserver = ClusterServer
+            visitor = ClusterVisitor(cserver._condition_name, cserver._parameters_name, cserver._user_sock_id)
             visitor.visit(ast_tree)
             modifier = ClusterModifier(visitor, self.max_while_tasks)
             modifier.create_templates()
@@ -914,6 +922,7 @@ class ClusterServer:
                 ClusterServer.exec_tree(self, modified_code)
             else:
                 logger.warning(f"File is unbreakable")
+                ClusterServer.send_final_output(self, False, None, None, None)
 
         def add_request(self, template_id, params, while_request):
             if while_request:
@@ -1016,6 +1025,8 @@ class ClusterServer:
         self.user_task_queue = queue.Queue()
         self.user_result_queue = queue.Queue()
         self.node_queue = queue.Queue()
+        self.user_id = count()
+        self.user_dict = dict()
         self.all_socks = dict()
         self.read_socks = list()
         self.write_socks = list()
@@ -1102,7 +1113,17 @@ class ClusterServer:
                         elif action == actions.CONNECT_AS_MEDIATOR or action == actions.CONNECT_AS_NODE \
                                 or action == actions.CONNECT_AS_USER:
                             with sock:
-                                sock.set_connection_type(action)
+                                if action == actions.CONNECT_AS_USER:
+                                    user_id = next(self.user_id)
+                                    sock.set_connection_type(action, user_id)
+                                    self.user_dict[user_id] = sock
+                                else:
+                                    if action == actions.CONNECT_AS_MEDIATOR:
+                                        user_id = data
+                                        user_sock = self.user_dict[user_id]
+                                        user_sock.mediator_sock = sock
+                                    sock.set_connection_type(action)
+
                         elif action == actions.USER_INPUT_FILE:
                             file = data
                             with sock:
@@ -1242,10 +1263,11 @@ class ClusterServer:
         std_out = StringIO()
         with redirect_stdout(std_out):
             try:
-                exec(compile(tree, file_name, 'exec'), {'builtins': globals()['__builtins__']})
+                exec(compile(tree, file_name, 'exec'), {'builtins': globals()['__builtins__'],
+                                                        cls._user_sock_id: sock.user_id})
             except Exception as e:
                 ClusterServer.raise_exception("while executing the file encountered", e)
-                cls.send_final_output(sock, "Failed", "None", 0.0, "None")
+                cls.send_final_output(sock, False, "None", 0.0, "None")
                 return
 
         finish_time = perf_counter()
@@ -1257,7 +1279,12 @@ class ClusterServer:
         logger.critical("[EXECUTION FINISHED] Program output:\n" + user_output
                         + f"\nfinished in {runtime} second(s)")
 
-        cls.send_final_output(sock, "Completed", output, runtime, "Empty")
+        node_ips = dict()
+        for _, action, ip in sock.mediator_sock.time_stamps:
+            if action is cls.Actions.SEND_TASK_TO_NODE:
+                node_count = node_ips.get(ip, 0)
+                node_ips[ip] = node_count + 1
+        cls.send_final_output(sock, True, output, runtime, node_ips)
 
     @classmethod
     def send_final_output(cls, sock, status, result, runtime, communication):

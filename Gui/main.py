@@ -8,7 +8,6 @@ from PyQt6 import QtGui
 from PyQt6.QtGui import QFont
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtWidgets import *
-from threading import Thread
 from itertools import count
 from time import perf_counter
 
@@ -398,16 +397,24 @@ class MainWindow(QMainWindow):
             with open(self.current_filepath) as file:
                 code = file.read()
                 self.sock.send_input_file(code)
-                Thread(target=lambda: self.exec_file(code, request_id)).start()
-            Thread(target=lambda: self.await_result(request_id)).start()
+            execution_finished = self.await_server(request_id)
+            if execution_finished:
+                self.exec_file(code, request_id)
         else:
             self.run_button.setEnabled(True)
 
-    def await_result(self, request_id):
+    def await_server(self, request_id):
         filename = self.get_filename
         output = self.sock.recv_final_output()
-        self.results_view.cluster_result(filename, request_id, *output)
+        status, *_ = output
+        if status:
+            self.results_view.cluster_result(filename, request_id, *output)
+        else:
+            self.results_view.cluster_result(filename, request_id, execution_failed=True)
+
         self.run_button.setEnabled(True)
+
+        return status
 
     def exec_file(self, code, request_id):
         start_time = perf_counter()
@@ -419,7 +426,6 @@ class MainWindow(QMainWindow):
     def show_dialog(self, title, text):
         dialog = QMessageBox(self)
         dialog.setWindowTitle(title)
-        # dialog.setWindowIcon(QIcon(":/icons/close-icon.svg"))
         dialog.setText(text)
         dialog.setStandardButtons(QMessageBox.StandardButton.Yes
                                   | QMessageBox.StandardButton.No
