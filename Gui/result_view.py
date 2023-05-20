@@ -298,13 +298,13 @@ class ResultPage(QFrame):
         self.info_header_label.setText(f"{self.header_label_value} - {item.name}")
         self.display_result(index.row())
 
-    def cluster_result(self, text, index, *results, execution_failed=False):
+    def cluster_result(self, text, index, *results, execution_finished=True):
         if self.initial_item:
             self.model.clear()
             self.initial_item = False
         item = Item(text, index)
         self.model.appendRow(item)
-        if not execution_failed:
+        if execution_finished:
             self.add_result(index, *results)
         else:
             self.add_failed(index)

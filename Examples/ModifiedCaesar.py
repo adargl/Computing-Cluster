@@ -1,4 +1,6 @@
-import enchant.checker as chkr
+import time
+import nltk
+from nltk.corpus import words
 
 
 def encrypt(message, rotation):
@@ -30,26 +32,25 @@ def decrypt(message, rotation):
     return result
 
 
-def is_sentence(sentence, checker):
-    """
-    Determines whether the input sentence is a proper English sentence or not.
-    Returns a boolean value.
-    """
-    checker.set_text(sentence)
-    for _ in checker:
-        return False
+def is_word(word):
+    word_set = set(words.words())
+    return word.lower() in word_set
+
+
+def is_sentence(sentence):
+    all_words = sentence.split()
+    for word in all_words:
+        if not is_word(word):
+            return False
     return True
 
 
-def find_best_word(encrypted_msg, checker):
-    """
-    Finds the first word in the input list that is a proper English word.
-    Returns None if no such word is found.
-    """
+def find_best_match(encrypted_msg):
     matches = dict()
     for rotation in range(26):
+        time.sleep(0.1)
         decrypted_msg = decrypt(encrypted_msg, rotation)
-        flag = is_sentence(decrypted_msg, checker)
+        flag = is_sentence(decrypted_msg)
         matches[rotation] = decrypted_msg if flag else None
 
     for rotation, decrypted in matches.items():
@@ -57,13 +58,12 @@ def find_best_word(encrypted_msg, checker):
             return rotation, decrypted
 
 
-# Initialize enchant dictionary
-language = "en_US"
-spell_checker = chkr.SpellChecker(language)
+# Download the English word corpus
+nltk.download('words')
 
 msg = "Secret message"
 encrypted = encrypt(msg, 21)
-key, word_match = find_best_word(encrypted, spell_checker)
+key, word_match = find_best_match(encrypted)
 
 print(f"""Key found: {key}
 Decrypted message: {word_match}""")

@@ -20,7 +20,7 @@ QTabWidget {
 
 QTabBar::tab {
     background-color: #363636;
-    color: #E6E6EE;
+    color: #e6e6ee;
     max-height: 6ex;
     padding: 10px 10px;
 }
@@ -30,7 +30,7 @@ QTabBar::tab::selected {
     border-style: none;
     color: #e6e6ee;
     background-color: #585858;
-    border-bottom: 2px solid #E6E6EE;
+    border-bottom: 2px solid #e6e6ee;
 }
 
 
@@ -44,6 +44,20 @@ QTabBar::close-button:hover {
 
 QsciScintilla {
     border: none;
+}
+
+QListView {
+    background-color: #353236;
+    color: #e6e6ee;
+    border: 1px solid #585858;
+}
+
+QListView::item:selected {
+    background-color: #585858;
+}
+
+QListView::item:hover {
+    background-color: #274e9d;
 }
 
 QTreeView {

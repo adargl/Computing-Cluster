@@ -8,6 +8,7 @@ from PyQt6 import QtGui
 from PyQt6.QtGui import QFont
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtWidgets import *
+from threading import Thread
 from itertools import count
 from time import perf_counter
 
@@ -397,24 +398,22 @@ class MainWindow(QMainWindow):
             with open(self.current_filepath) as file:
                 code = file.read()
                 self.sock.send_input_file(code)
-            execution_finished = self.await_server(request_id)
-            if execution_finished:
-                self.exec_file(code, request_id)
+            Thread(target=lambda: self.handle_file(request_id, code)).start()
         else:
             self.run_button.setEnabled(True)
 
-    def await_server(self, request_id):
+    def handle_file(self, request_id, code):
         filename = self.get_filename
         output = self.sock.recv_final_output()
-        status, *_ = output
-        if status:
+        execution_finished, *_ = output
+        if execution_finished:
             self.results_view.cluster_result(filename, request_id, *output)
         else:
-            self.results_view.cluster_result(filename, request_id, execution_failed=True)
+            self.results_view.cluster_result(filename, request_id, execution_finished=False)
 
+        if execution_finished:
+            self.exec_file(code, request_id)
         self.run_button.setEnabled(True)
-
-        return status
 
     def exec_file(self, code, request_id):
         start_time = perf_counter()

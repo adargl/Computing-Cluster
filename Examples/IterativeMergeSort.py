@@ -1,4 +1,5 @@
 from random import randint
+import time
 
 
 def merge_sort(array):
@@ -7,6 +8,7 @@ def merge_sort(array):
 
     # While there is more than one subarray, merge pairs of adjacent subarrays
     while len(subarrays) > 1:
+        time.sleep(0.5)
         merged = []
         for i in range(0, len(subarrays), 2):
             # Merge the subarrays if there are two

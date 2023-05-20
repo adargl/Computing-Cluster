@@ -17,10 +17,6 @@ class CodeEditor(QsciScintilla):
         self._file_changed = False
         self.textChanged.connect(self.text_changed)
 
-        # Editor
-        # self.cursorPositionChanged.connect(self._cusorPositionChanged)
-        # self.textChanged.connect(self._textChanged)
-
         # Encoding
         self.setUtf8(True)
 
@@ -38,8 +34,8 @@ class CodeEditor(QsciScintilla):
 
         # Indentation
         self.setTabWidth(4)
+        self.setIndentationsUseTabs(False)
         self.setIndentationGuides(True)
-        self.setIndentationsUseTabs(True)
         self.setAutoIndent(True)
 
         # Autocomplete
@@ -77,7 +73,7 @@ class CodeEditor(QsciScintilla):
 
         self.__api = Qsci.QsciAPIs(self.python_lexer)
         # self.auto_completer = Qsci.QScintilla.AutoCompleter(self.full_path, self.__api)
-        # self.auto_completer.finished.connect(self.loaded_autocomplete)  # you can use this callback to do something
+        # self.auto_completer.finished.connect(self.loaded_autocomplete)
 
         self.setLexer(self.python_lexer)
 
