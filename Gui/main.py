@@ -4,6 +4,7 @@ from User import User
 from editor import CodeEditor
 from file_view import FileManager
 from result_view import ResultPage
+from result_view import ExecutionStatus
 from PyQt6 import QtGui
 from PyQt6.QtGui import QFont
 from PyQt6.QtCore import Qt, QSize
@@ -406,12 +407,22 @@ class MainWindow(QMainWindow):
         filename = self.get_filename
         output = self.sock.recv_final_output()
         execution_finished, *_ = output
-        if execution_finished:
+        if execution_finished == 0:
+            status_enum = ExecutionStatus.COMPLETED
+        elif execution_finished == 1:
+            status_enum = ExecutionStatus.REJECTED
+        else:
+            status_enum = ExecutionStatus.FAILED
+
+        status, runtime, result, communication = output
+        output = status_enum, runtime, result, communication
+
+        if status_enum == ExecutionStatus.COMPLETED:
             self.results_view.cluster_result(filename, request_id, *output)
         else:
-            self.results_view.cluster_result(filename, request_id, execution_finished=False)
+            self.results_view.cluster_result(filename, request_id, *output, execution_finished=False)
 
-        if execution_finished:
+        if status_enum == ExecutionStatus.COMPLETED:
             self.exec_file(code, request_id)
         self.run_button.setEnabled(True)
 

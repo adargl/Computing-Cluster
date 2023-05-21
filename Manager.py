@@ -766,6 +766,14 @@ class ClusterServer:
         Mediator = "Mediator"
         UNDEFINED = "None"
 
+    class ExecutionStatus(Enum):
+        COMPLETED = 0
+        REJECTED = 1
+        FAILED = 2
+
+        def __str__(self):
+            return self.value
+
     class CustomSocket:
         _ids = count()
         _all_templates = queue.Queue()
@@ -922,7 +930,7 @@ class ClusterServer:
                 ClusterServer.exec_tree(self, modified_code)
             else:
                 logger.warning(f"File is unbreakable")
-                ClusterServer.send_final_output(self, False, None, None, None)
+                ClusterServer.send_final_output(self, ClusterServer.ExecutionStatus.REJECTED)
 
         def add_request(self, template_id, params, while_request):
             if while_request:
@@ -1267,7 +1275,7 @@ class ClusterServer:
                                                         cls._user_sock_id: sock.user_id})
             except Exception as e:
                 ClusterServer.raise_exception("while executing the file encountered", e)
-                cls.send_final_output(sock, False, "None", 0.0, "None")
+                cls.send_final_output(sock, cls.ExecutionStatus.FAILED)
                 return
 
         finish_time = perf_counter()
@@ -1284,11 +1292,11 @@ class ClusterServer:
             if action is cls.Actions.SEND_TASK_TO_NODE:
                 node_count = node_ips.get(ip, 0)
                 node_ips[ip] = node_count + 1
-        cls.send_final_output(sock, True, output, runtime, node_ips)
+        cls.send_final_output(sock, cls.ExecutionStatus.COMPLETED, output, runtime, node_ips)
 
     @classmethod
-    def send_final_output(cls, sock, status, result, runtime, communication):
-        status, runtime = pickle.dumps(status), pickle.dumps(runtime)
+    def send_final_output(cls, sock, status, result=None, runtime=None, communication=None):
+        status, runtime = pickle.dumps(status.value), pickle.dumps(runtime)
         result, communication = pickle.dumps(result), pickle.dumps(communication)
 
         pickled_msg = pack('>4I', len(status), len(runtime), len(result), len(communication)) \
@@ -1361,10 +1369,7 @@ def has_body(ast_node):
 
 
 if __name__ == '__main__':
-    logging_file = 'Server.log'
     fmt = '%(name)s %(asctime)s.%(msecs)03d %(message)s', '%I:%M:%S'
-    with open(logging_file, 'w'):
-        pass
 
     logger = logging.getLogger(__name__)
     logger.setLevel(logging.INFO)
@@ -1372,10 +1377,5 @@ if __name__ == '__main__':
     stream_handler.setLevel(logger.level)
     stream_handler.setFormatter(CustomFormatter(*fmt))
     logger.addHandler(stream_handler)
-
-    file_handler = logging.FileHandler(logging_file)
-    file_handler.setLevel(logger.level)
-    file_handler.setFormatter(logging.Formatter(*fmt))
-    logger.addHandler(file_handler)
 
     server = ClusterServer()

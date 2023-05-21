@@ -12,6 +12,16 @@ class Status(Enum):
     COMPLETED = "completed"
 
 
+class ExecutionStatus(Enum):
+    COMPLETED = "completed"
+    ONGOING = "ongoing"
+    REJECTED = "rejected"
+    FAILED = "failed"
+
+    def __str__(self):
+        return self.value
+
+
 class Colors(Enum):
     NORMAL = "#868079"
     FAILURE = "#DE463C"
@@ -127,7 +137,7 @@ class ResultTree(QTreeView):
 
     def add_result(self, index, status, runtime, results, communication):
         if not self.all_results.get(index):
-            new_result = {'user_runtime': Status.ONGOING}
+            new_result = {'user_runtime': ExecutionStatus.ONGOING}
         else:
             with self.lock:
                 new_result = self.all_results.get(index)
@@ -137,20 +147,20 @@ class ResultTree(QTreeView):
         with self.lock:
             self.all_results[index] = new_result
 
-    def add_failed(self, index):
-        self.all_results[index] = {'status': False}
+    def add_unsuccessful(self, index, status):
+        self.all_results[index] = {'status': status}
 
     def display_result(self, index):
         with self.lock:
             current_result = self.all_results[index]
 
-        execution_failed = False
+        execution_unsuccessful = False
         execution_status = current_result['status']
         for item, function in [(self.exec_status, self.handle_status), (self.runtime_info, self.handle_runtime),
                                (self.final_result, self.handle_results),
                                (self.communication, self.handle_communication)]:
 
-            values = function(current_result) if not execution_failed else []
+            values = function(current_result) if not execution_unsuccessful else []
             for _ in range(item.rowCount()):
                 item.takeRow(0)
             for i in values:
@@ -161,12 +171,20 @@ class ResultTree(QTreeView):
                 new_item.setSelectable(False)
                 item.appendRow(new_item)
 
-            if not execution_status:
-                execution_failed = True
+            if not execution_status == ExecutionStatus.COMPLETED:
+                execution_unsuccessful = True
 
     def handle_status(self, current_result):
-        bool_value = current_result['status']
-        item = ("Execution completed", Colors.SUCCESS) if bool_value else ("Execution rejected", Colors.WARNING)
+        status = current_result['status']
+        if status == ExecutionStatus.COMPLETED:
+            color = Colors.SUCCESS
+        elif status == ExecutionStatus.REJECTED:
+            color = Colors.WARNING
+        elif status == ExecutionStatus.FAILED:
+            color = Colors.FAILURE
+        else:
+            color = Colors.NORMAL
+        item = (f"Execution {str(status)}", color)
         return [item]
 
     def handle_runtime(self, current_result):
@@ -174,8 +192,8 @@ class ResultTree(QTreeView):
         user_runtime = current_result.get('user_runtime')
         runtime = current_result.get('runtime')
         item1 = f"{runtime} {seconds} on Cluster"
-        if user_runtime == Status.ONGOING:
-            item2 = f"Control run is still {user_runtime.value}"
+        if user_runtime == ExecutionStatus.ONGOING:
+            item2 = f"Control run is still {str(user_runtime)}"
             return [item1, item2]
         elif user_runtime:
             item2 = f"{user_runtime} {seconds} Control Run"
@@ -307,7 +325,8 @@ class ResultPage(QFrame):
         if execution_finished:
             self.add_result(index, *results)
         else:
-            self.add_failed(index)
+            execution_status, *_ = results
+            self.add_unsuccessful(index, execution_status)
 
     def user_result(self, index, runtime):
         currently_displayed = self.list_view.currentIndex().row() == index
@@ -316,8 +335,8 @@ class ResultPage(QFrame):
     def add_result(self, index, *result):
         self.tree.add_result(index, *result)
 
-    def add_failed(self, index):
-        self.tree.add_failed(index)
+    def add_unsuccessful(self, index, status):
+        self.tree.add_unsuccessful(index, status)
 
     def display_result(self, index=None):
         if index is None:

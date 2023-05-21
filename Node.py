@@ -80,10 +80,7 @@ class Node(BaseClient):
 
 
 if __name__ == '__main__':
-    logging_file = 'Server.log'
     fmt = '%(name)s %(asctime)s.%(msecs)03d %(message)s', '%I:%M:%S'
-    with open(logging_file, 'w'):
-        pass
 
     logger = logging.getLogger(__name__)
     logger.setLevel(logging.INFO)
