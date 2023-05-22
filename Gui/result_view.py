@@ -7,12 +7,6 @@ from threading import Lock
 
 
 class Status(Enum):
-    ONGOING = "ongoing"
-    FAILED = "failed"
-    COMPLETED = "completed"
-
-
-class ExecutionStatus(Enum):
     COMPLETED = "completed"
     ONGOING = "ongoing"
     REJECTED = "rejected"
@@ -123,21 +117,22 @@ class ResultTree(QTreeView):
             color: none;
         }''')
 
-    def add_user_runtime(self, index, runtime, currently_displayed):
+    def add_user_runtime(self, index, runtime, serial_exec_status, currently_displayed):
         current_result = self.all_results.get(index)
         if current_result:
             with self.lock:
                 self.all_results[index]['user_runtime'] = runtime
+                self.all_results[index]['user_status'] = serial_exec_status
         else:
             with self.lock:
-                self.all_results[index] = {'user_runtime': runtime}
+                self.all_results[index] = {'user_runtime': runtime, 'user_status': serial_exec_status}
 
         if currently_displayed:
             self.display_result(index)
 
     def add_result(self, index, status, runtime, results, communication):
         if not self.all_results.get(index):
-            new_result = {'user_runtime': ExecutionStatus.ONGOING}
+            new_result = {'user_runtime': Status.ONGOING}
         else:
             with self.lock:
                 new_result = self.all_results.get(index)
@@ -155,7 +150,7 @@ class ResultTree(QTreeView):
             current_result = self.all_results[index]
 
         execution_unsuccessful = False
-        execution_status = current_result['status']
+        cluster_status, user_status = current_result['status'], current_result.get('user_status', Status.COMPLETED)
         for item, function in [(self.exec_status, self.handle_status), (self.runtime_info, self.handle_runtime),
                                (self.final_result, self.handle_results),
                                (self.communication, self.handle_communication)]:
@@ -171,19 +166,23 @@ class ResultTree(QTreeView):
                 new_item.setSelectable(False)
                 item.appendRow(new_item)
 
-            if not execution_status == ExecutionStatus.COMPLETED:
+            if cluster_status != Status.COMPLETED or user_status != Status.COMPLETED:
                 execution_unsuccessful = True
 
     def handle_status(self, current_result):
-        status = current_result['status']
-        if status == ExecutionStatus.COMPLETED:
-            color = Colors.SUCCESS
-        elif status == ExecutionStatus.REJECTED:
-            color = Colors.WARNING
-        elif status == ExecutionStatus.FAILED:
+        status = current_result.get('user_status', Status.COMPLETED)
+        if status == Status.FAILED:
             color = Colors.FAILURE
         else:
-            color = Colors.NORMAL
+            status = current_result['status']
+            if status == Status.COMPLETED:
+                color = Colors.SUCCESS
+            elif status == Status.REJECTED:
+                color = Colors.WARNING
+            elif status == Status.FAILED:
+                color = Colors.FAILURE
+            else:
+                color = Colors.NORMAL
         item = (f"Execution {str(status)}", color)
         return [item]
 
@@ -192,7 +191,7 @@ class ResultTree(QTreeView):
         user_runtime = current_result.get('user_runtime')
         runtime = current_result.get('runtime')
         item1 = f"{runtime} {seconds} on Cluster"
-        if user_runtime == ExecutionStatus.ONGOING:
+        if user_runtime == Status.ONGOING:
             item2 = f"Control run is still {str(user_runtime)}"
             return [item1, item2]
         elif user_runtime:
@@ -328,9 +327,9 @@ class ResultPage(QFrame):
             execution_status, *_ = results
             self.add_unsuccessful(index, execution_status)
 
-    def user_result(self, index, runtime):
+    def user_result(self, index, runtime, serial_exec_status):
         currently_displayed = self.list_view.currentIndex().row() == index
-        self.tree.add_user_runtime(index, runtime, currently_displayed)
+        self.tree.add_user_runtime(index, runtime, serial_exec_status, currently_displayed)
 
     def add_result(self, index, *result):
         self.tree.add_result(index, *result)

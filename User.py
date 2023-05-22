@@ -13,7 +13,7 @@ class User(BaseClient):
         super().init_connection()
         self.connect_as_user()
 
-    def send_input_file(self, file):
+    def cluster_exec(self, file):
         self.send_msg(self.conn_sock, self.Actions.USER_INPUT_FILE, file)
 
     def recv_final_output(self):
@@ -47,4 +47,4 @@ if __name__ == '__main__':
     client.init_connection()
     file_name = "Examples/Crisper.py"
     with open(file_name) as f:
-        client.send_input_file(f.read())
+        client.cluster_exec(f.read())

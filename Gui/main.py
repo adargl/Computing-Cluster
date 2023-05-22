@@ -4,7 +4,7 @@ from User import User
 from editor import CodeEditor
 from file_view import FileManager
 from result_view import ResultPage
-from result_view import ExecutionStatus
+from result_view import Status
 from PyQt6 import QtGui
 from PyQt6.QtGui import QFont
 from PyQt6.QtCore import Qt, QSize
@@ -15,6 +15,19 @@ from time import perf_counter
 
 from enum import Enum
 from pathlib import Path
+
+
+class StatusMapping(Enum):
+    COMPLETED = 0
+    REJECTED = 1
+    FAILED = 2
+
+    @classmethod
+    def get_status_enum(cls, status_value):
+        for status_enum in cls:
+            if status_enum.value == status_value:
+                return Status[status_enum.name]
+        raise ValueError("Invalid status value")
 
 
 class MainWindow(QMainWindow):
@@ -274,10 +287,10 @@ class MainWindow(QMainWindow):
         min_width, min_height = tuple(self.constants_json["sidebar"]["sizes"]["min"])
 
         sizes = self.splitter.sizes()
-        if sizes[0] == max_width:
-            sizes[0], sizes[2] = min_width, sum(sizes) - min_width - sizes[1]
-        else:
+        if sizes[0] == min_width:
             sizes[0], sizes[2] = max_width, sum(sizes) - max_width - sizes[1]
+        else:
+            sizes[0], sizes[2] = min_width, sum(sizes) - min_width - sizes[1]
         self.splitter.setSizes(sizes)
 
     def toggle_file_view(self):
@@ -285,10 +298,10 @@ class MainWindow(QMainWindow):
         min_width, min_height = tuple(self.constants_json["file-view"]["sizes"]["min"])
 
         sizes = self.splitter.sizes()
-        if sizes[1] == max_width:
-            sizes[1], sizes[2] = min_width, sum(sizes) - min_width - sizes[0]
-        else:
+        if sizes[1] == min_width:
             sizes[1], sizes[2] = max_width, sum(sizes) - max_width - sizes[0]
+        else:
+            sizes[1], sizes[2] = min_width, sum(sizes) - min_width - sizes[0]
         self.splitter.setSizes(sizes)
 
     def empty_tab(self):
@@ -327,7 +340,7 @@ class MainWindow(QMainWindow):
     def close_tab(self, index):
         editor = self.tab_view.widget(index)
         if editor.file_changed:
-            pressed = self.show_dialog("Close", f"Do you want to save the changes you made to {editor.filename}?")
+            pressed = self.warning_dialog("Close", f"Do you want to save the changes you made to {editor.filename}?")
             if pressed == QMessageBox.StandardButton.Yes:
                 self.save_file()
             elif pressed == QMessageBox.StandardButton.No:
@@ -398,42 +411,40 @@ class MainWindow(QMainWindow):
         if self.current_filepath:
             with open(self.current_filepath) as file:
                 code = file.read()
-                self.sock.send_input_file(code)
-            Thread(target=lambda: self.handle_file(request_id, code)).start()
+            Thread(target=self.handle_run, args=(request_id, code)).start()
         else:
             self.run_button.setEnabled(True)
 
-    def handle_file(self, request_id, code):
+    def handle_run(self, request_id, code):
         filename = self.get_filename
+        self.sock.cluster_exec(code)
         output = self.sock.recv_final_output()
-        execution_finished, *_ = output
-        if execution_finished == 0:
-            status_enum = ExecutionStatus.COMPLETED
-        elif execution_finished == 1:
-            status_enum = ExecutionStatus.REJECTED
-        else:
-            status_enum = ExecutionStatus.FAILED
+        status_value, *_ = output
+        status_enum = StatusMapping.get_status_enum(status_value)
+        _, *values = output
+        output = status_enum, *values
 
-        status, runtime, result, communication = output
-        output = status_enum, runtime, result, communication
-
-        if status_enum == ExecutionStatus.COMPLETED:
+        if status_enum == Status.COMPLETED:
             self.results_view.cluster_result(filename, request_id, *output)
+            self.serial_exec(request_id, code)
         else:
             self.results_view.cluster_result(filename, request_id, *output, execution_finished=False)
 
-        if status_enum == ExecutionStatus.COMPLETED:
-            self.exec_file(code, request_id)
         self.run_button.setEnabled(True)
 
-    def exec_file(self, code, request_id):
+    def serial_exec(self, request_id, code):
+        serial_exec_status = Status.COMPLETED
         start_time = perf_counter()
-        exec(code, {'builtins': globals()['__builtins__']})
+        try:
+            exec(code, {'builtins': globals()['__builtins__']})
+        except Exception as e:
+            # self.warning_dialog("Error", f"Control run encountered: {e}")
+            serial_exec_status = Status.FAILED
         finish_time = perf_counter()
         runtime = finish_time - start_time
-        self.results_view.user_result(request_id, runtime)
+        self.results_view.user_result(request_id, runtime, serial_exec_status)
 
-    def show_dialog(self, title, text):
+    def warning_dialog(self, title, text):
         dialog = QMessageBox(self)
         dialog.setWindowTitle(title)
         dialog.setText(text)
@@ -442,6 +453,15 @@ class MainWindow(QMainWindow):
                                   | QMessageBox.StandardButton.Cancel)
         dialog.setDefaultButton(QMessageBox.StandardButton.Cancel)
         dialog.setIcon(QMessageBox.Icon.Warning)
+        return dialog.exec()
+
+    def error_dialog(self, title, text):
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle(title)
+        dialog.setText(text)
+        dialog.setStandardButtons(QMessageBox.StandardButton.Ok)
+        dialog.setDefaultButton(QMessageBox.StandardButton.Ok)
+        dialog.setIcon(QMessageBox.Icon.Critical)
         return dialog.exec()
 
 

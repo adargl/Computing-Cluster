@@ -121,8 +121,8 @@ class ClusterVisitor(ast.NodeVisitor):
 
         self.current_func = self.Function.empty_instance()
         self.current_loop = self.Loop.empty_instance()
-        self.current_container = None
         self.hierarchy_stack = list()
+        self.container_stack = list()
 
         self.imports = {"import": [], "from": []}
         self.loops = list()
@@ -131,8 +131,24 @@ class ClusterVisitor(ast.NodeVisitor):
         self.parameters = set()
         self.builtin_funcs = set()
 
+    def get_current_container(self, node):
+        current_container = self.module_node
+        while self.container_stack and not self.is_within(node, self.container_stack[-1]):
+            self.container_stack.pop()
+        if self.container_stack:
+            current_container = self.container_stack[-1]
+        self.container_stack.append(node)
+        return current_container
+
+    def update_container_stack(self, node):
+        while self.container_stack and not self.is_within(node, self.container_stack[-1]):
+            self.container_stack.pop()
+        self.container_stack.append(node)
+
     @staticmethod
     def is_within(node, container):
+        if isinstance(container, ast.Module):
+            return True
         return container.lineno < node.lineno <= container.end_lineno
 
     def is_builtin(self, node):
@@ -155,7 +171,7 @@ class ClusterVisitor(ast.NodeVisitor):
 
     def generic_visit(self, node):
         if has_body(node):
-            self.current_container = node
+            self.update_container_stack(node)
         super().generic_visit(node)
 
     def visit_Module(self, node):
@@ -174,7 +190,7 @@ class ClusterVisitor(ast.NodeVisitor):
 
         # Update the current function variable with every visit
         if initial:
-            function = self.Function(node, self.current_container)
+            function = self.Function(node, self.get_current_container(node))
             self.current_func = function
             # Save the function node and name
             self.functions[node.name] = function
@@ -214,8 +230,9 @@ class ClusterVisitor(ast.NodeVisitor):
                 if function.attr == 'start' or function.attr == 'join':
                     for thread in self.threads:
                         if thread.name == function.value.id:
-                            thread.set_start_call(node, self.current_container) \
-                                if function.attr == 'start' else thread.set_join_call(node, self.current_container)
+                            current_container = self.get_current_container(node)
+                            thread.set_start_call(node, current_container) \
+                                if function.attr == 'start' else thread.set_join_call(node, current_container)
         self.generic_visit(node)
 
     def visit_Call(self, node):
@@ -242,13 +259,13 @@ class ClusterVisitor(ast.NodeVisitor):
 
     def visit_loop(self, node, loop_type):
         if not self.is_within(node, self.current_loop):
-            loop = self.Loop(node, self.current_container, loop_type)
+            loop = self.Loop(node, self.get_current_container(node), loop_type)
             self.loops.append(loop)
             self.current_loop = loop
         else:
             loop = self.loops[-1]
             loop.set_nested()
-            loop = self.Loop(node, self.current_container, loop_type)
+            loop = self.Loop(node, self.get_current_container(node), loop_type)
             self.loops.append(loop)
             if isinstance(node.target, ast.Name):
                 self.builtin_funcs.add(node.target.id)
@@ -277,7 +294,7 @@ class ClusterVisitor(ast.NodeVisitor):
 
         # Make sure that the thread function call is not recursive
         if not self.is_within(assign_node, self.current_loop) or func_name != self.current_func.name:
-            thread = self.Thread(assign_node, self.current_container, args, func_name, name)
+            thread = self.Thread(assign_node, self.get_current_container(assign_node), args, func_name, name)
             self.threads.append(thread)
             function = self.functions[func_name]
             self.find_nested_functions(function.node)
@@ -308,7 +325,6 @@ class ClusterModifier(ast.NodeTransformer):
         self.all_params = set()
 
         self.templates_count = 0
-        self.current_container = None
         self.instructions = None
 
         self.visit_params = False
@@ -658,9 +674,6 @@ class ClusterModifier(ast.NodeTransformer):
 
             return node
 
-        # If the visit is not custom use the original generic_visit method
-        if has_body(node):
-            self.current_container = node
         return super().generic_visit(node)
 
     def visit_Global(self, node):
@@ -697,7 +710,8 @@ class ClusterModifier(ast.NodeTransformer):
             type_ignores=[]
         )
         self.templates[self.templates_count] = TaskMaker(
-            template, len(self.imports + self.original_functions) + 1, self.instructions, self.names['parameters']
+            template, len(self.imports + self.original_functions) + 1, self.instructions, self.names['parameters'],
+            self.templates_count
         )
 
         self.templates_count += 1
@@ -763,8 +777,9 @@ class ClusterServer:
     class ConnectionStatus(Enum):
         USER = "User"
         NODE = "Node"
-        Mediator = "Mediator"
-        UNDEFINED = "None"
+        MEDIATOR = "Mediator"
+        UNDEFINED = "Undefined"
+        DISCONNECTED = "Disconnected"
 
     class ExecutionStatus(Enum):
         COMPLETED = 0
@@ -792,7 +807,7 @@ class ClusterServer:
             self.connection_type = ClusterServer.ConnectionStatus.UNDEFINED
 
             # If connection_type is Node
-            self.hash_to_sock = dict()
+            self.task_to_sock = dict()
             self.ongoing_tasks = dict()
             self.executed_tasks = dict()
             self.unhandled_requests = 0
@@ -809,6 +824,7 @@ class ClusterServer:
             self.id_to_task = None
             self.req_id = count()
             self.task_queue = queue.Queue()
+            self.restored_tasks = queue.Queue()
 
             # If connection_type is User
             self.user_id = 0
@@ -865,7 +881,7 @@ class ClusterServer:
                 self.mediator_sock = None
 
             def clear_node_data():
-                self.hash_to_sock.clear()
+                self.task_to_sock.clear()
                 self.ongoing_tasks.clear()
                 self.executed_tasks.clear()
                 self.available_threads = 0
@@ -880,6 +896,8 @@ class ClusterServer:
                 self.result_id = 0
                 with self.task_queue.mutex:
                     self.task_queue.queue.clear()
+                with self.restored_tasks.mutex:
+                    self.restored_tasks.queue.clear()
 
             if connection_type == ClusterServer.Actions.CONNECT_AS_MEDIATOR:
                 clear_node_data()
@@ -887,21 +905,22 @@ class ClusterServer:
                 self.templates = self._all_templates.get()
                 self.results = {i: {} for i in range(len(self.templates))}
                 self.init_id_to_task()
+                self.connection_type = ClusterServer.ConnectionStatus.MEDIATOR
             elif connection_type == ClusterServer.Actions.CONNECT_AS_NODE:
                 clear_mediator_data()
                 clear_user_data()
+                self.connection_type = ClusterServer.ConnectionStatus.NODE
             elif connection_type == ClusterServer.Actions.CONNECT_AS_USER:
                 clear_mediator_data()
                 clear_node_data()
                 self.user_id = user_id
+                self.connection_type = ClusterServer.ConnectionStatus.USER
             else:
                 logger.error(
                     f"[CONNECTION DENIED] connection must be of type {ClusterServer.ConnectionStatus.NODE.value}, "
-                    f"{ClusterServer.ConnectionStatus.USER.value} or {ClusterServer.ConnectionStatus.Mediator.value} "
+                    f"{ClusterServer.ConnectionStatus.USER.value} or {ClusterServer.ConnectionStatus.MEDIATOR.value} "
                     f"when initialized")
                 return
-
-            self.connection_type = connection_type
 
         def time_stamp_action(self, action, ip=None):
             self.time_stamps.append((time(), action, ip if ip else self.ip))
@@ -937,23 +956,26 @@ class ClusterServer:
                 self.currently_handling_while = True
             elif self.currently_handling_while:
                 self.currently_handling_while = False
-            self.task_queue.put((template_id, params))
+            task = self.get_task(template_id, params)
+            self.task_queue.put(task)
 
         def get_request(self):
-            if self.task_queue.empty():
-                return None
+            if not self.restored_tasks.empty():
+                return self.restored_tasks.get()
+            elif self.task_queue.empty():
+                return
             return self.task_queue.get()
 
-        def add_task(self, user_sock, params):
+        def add_task(self, user_sock, task):
             new_id = next(self.task_id)
-            self.ongoing_tasks[new_id] = params
-            self.hash_to_sock[new_id] = user_sock
+            self.ongoing_tasks[new_id] = task
+            self.task_to_sock[new_id] = user_sock
             return new_id
 
         def get_task(self, template_id, params):
-            task = self.templates[template_id]
-            task.params = params
-            return task.to_executable()
+            template = self.templates[template_id]
+            task = template.to_executable(params)
+            return task
 
         def get_result(self):
             template_id, current_result = self.template_id, self.results[self.template_id]
@@ -1017,8 +1039,17 @@ class ClusterServer:
                             else:
                                 response[key] = new_value
 
-        def node_failure(self):
-            pass
+        def restore_tasks(self, server_user_queue):
+            for task_id, task in self.ongoing_tasks.items():
+                user_sock = self.task_to_sock[task_id]
+                with user_sock:
+                    user_sock.restored_tasks.put(task)
+                    user_sock.unhandled_requests -= 1
+                server_user_queue.put(user_sock)
+
+        def connection_failure(self, server_user_queue):
+            if self.connection_type == ClusterServer.ConnectionStatus.NODE:
+                self.restore_tasks(server_user_queue)
 
     def __init__(self, port=55555, send_format="utf-8", buffer_size=1024, max_queue=5, max_while_tasks=15):
         self.ip = "0.0.0.0"
@@ -1098,17 +1129,18 @@ class ClusterServer:
                             with self.task_condition:
                                 self.task_condition.notify()
                         elif action == actions.TASK_RESPONSE or action == actions.TASK_FAILED:
-                            task_id, params = reserved, data
+                            task_id, new_params = reserved, data
                             with sock:
                                 original = sock.ongoing_tasks.pop(task_id)
                                 sock.executed_tasks[task_id] = original
-                                user_sock = sock.hash_to_sock[task_id]
+                                user_sock = sock.task_to_sock[task_id]
+                            org_params = original.params
                             with user_sock:
                                 if not action == actions.TASK_FAILED:
                                     if user_sock.currently_handling_while:
-                                        user_sock.update_while_result(task_id, original, params)
+                                        user_sock.update_while_result(task_id, org_params, new_params)
                                     else:
-                                        user_sock.update_result(original, params)
+                                        user_sock.update_result(org_params, new_params)
 
                                 if user_sock.unhandled_requests > 0:
                                     user_sock.unhandled_requests -= 1
@@ -1118,6 +1150,7 @@ class ClusterServer:
                                     self.user_result_queue.put(user_sock)
                                     with self.result_condition:
                                         self.result_condition.notify()
+
                         elif action == actions.CONNECT_AS_MEDIATOR or action == actions.CONNECT_AS_NODE \
                                 or action == actions.CONNECT_AS_USER:
                             with sock:
@@ -1157,42 +1190,48 @@ class ClusterServer:
 
     def recv_msg(self, sock):
         with sock as socket_object:
-            raw_header = self.recv_limited_bytes(socket_object, 16)
+            raw_header = None
+            try:
+                raw_header = self.recv_limited_bytes(socket_object, 16)
+            except Exception as e:
+                self.raise_exception("while receiving a message encountered", e)
             if not raw_header:
-                return None
+                return
+
             msg_len, op_code, optional, reserved = unpack('>4I', raw_header)
             pickled_msg = self.recv_limited_bytes(socket_object, msg_len)
             msg = pickle.loads(pickled_msg)
 
-            actions = self.Actions
-            action = actions.UNDEFINED_CODE
-            if 0 < op_code < len(actions) - 1:
-                msg_fmt = None
-                action = actions(op_code)
-                if action == actions.PROCESSING_REQUEST or action == actions.WHILE_PROCESSING_REQUEST:
-                    template_id = optional
-                    msg_fmt = f"processing request (id={template_id})"
-                elif action == actions.GET_RESULTS_REQUEST:
-                    task_group_id = optional
-                    logger.info(f"[DATA RECEIVED] get results request (id={task_group_id})")
-                elif action == actions.NODE_AVAILABLE:
-                    logger.info(f"[NODE AVAILABLE] {sock.ip} executed {len(sock.executed_tasks)} task(s)")
-                    logger.info(f"[NODE AVAILABLE] {sock.ip} can have {msg} threads available")
-                elif action == actions.TASK_RESPONSE:
-                    task_id = optional
-                    msg_fmt = f"process result (id={task_id})"
-                elif action == actions.TASK_FAILED:
-                    task_id = optional
-                    logger.warning(f"[TASK FAILED] failed to execute task (id={task_id})")
-                elif action == actions.CONNECT_AS_MEDIATOR:
-                    logger.info(f"[NEW USER CONNECTION] {sock.ip} connected as a mediator")
-                elif action == actions.CONNECT_AS_USER:
-                    logger.info(f"[NEW USER CONNECTION] {sock.ip} connected as a user")
-                elif action == actions.CONNECT_AS_NODE:
-                    logger.info(f"[NEW NODE CONNECTION] {sock.ip} connected as a node")
-                if msg_fmt:
-                    logger.info(f"[DATA RECEIVED] {msg_fmt}: {msg}")
+        actions = self.Actions
+        action = actions.UNDEFINED_CODE
+        if 0 < op_code < len(actions) - 1:
+            msg_fmt = None
+            action = actions(op_code)
+            if action == actions.PROCESSING_REQUEST or action == actions.WHILE_PROCESSING_REQUEST:
+                template_id = optional
+                msg_fmt = f"processing request (id={template_id})"
+            elif action == actions.GET_RESULTS_REQUEST:
+                task_group_id = optional
+                logger.info(f"[DATA RECEIVED] get results request (id={task_group_id})")
+            elif action == actions.NODE_AVAILABLE:
+                logger.info(f"[NODE AVAILABLE] {sock.ip} executed {len(sock.executed_tasks)} task(s)")
+                logger.info(f"[NODE AVAILABLE] {sock.ip} can have {msg} threads available")
+            elif action == actions.TASK_RESPONSE:
+                task_id = optional
+                msg_fmt = f"process result (id={task_id})"
+            elif action == actions.TASK_FAILED:
+                task_id = optional
+                logger.warning(f"[TASK FAILED] failed to execute task (id={task_id})")
+            elif action == actions.CONNECT_AS_MEDIATOR:
+                logger.info(f"[NEW USER CONNECTION] {sock.ip} connected as a mediator")
+            elif action == actions.CONNECT_AS_USER:
+                logger.info(f"[NEW USER CONNECTION] {sock.ip} connected as a user")
+            elif action == actions.CONNECT_AS_NODE:
+                logger.info(f"[NEW NODE CONNECTION] {sock.ip} connected as a node")
+            if msg_fmt:
+                logger.info(f"[DATA RECEIVED] {msg_fmt}: {msg}")
 
+        with sock:
             sock.time_stamp_action(action)
 
         return action, optional, reserved, msg
@@ -1200,11 +1239,7 @@ class ClusterServer:
     def recv_limited_bytes(self, sock, n):
         data = bytearray()
         while len(data) < n:
-            packet = None
-            try:
-                packet = sock.recv(n - len(data))
-            except Exception as e:
-                self.raise_exception("while receiving a message encountered", e)
+            packet = sock.recv(n - len(data))
             if not packet:
                 return None
             data.extend(packet)
@@ -1223,19 +1258,17 @@ class ClusterServer:
                 user_sock = self.user_task_queue.get()
                 with user_sock:
                     user_sock.unhandled_requests += 1
-                    data = user_sock.get_request()
-                if not data:
+                    task = user_sock.get_request()
+                if not task:
                     with user_sock:
                         user_sock.unhandled_requests -= 1
                     self.node_queue.put(node_sock)
                     logger.warning(f"[TASK NOT FOUND] task on {user_sock.ip} might have gone unhandled")
                     continue
-                template_id, params = data
-                task = user_sock.get_task(template_id, params)
-                task_id = node_sock.add_task(user_sock, params)
+                task_id = node_sock.add_task(user_sock, task)
                 user_sock.map_task_id_to_req_id(task_id)
                 user_sock.time_stamp_action(self.Actions.SEND_TASK_TO_NODE, node_sock.ip)
-                self.send_msg(node_sock, self.Actions.SEND_TASK_TO_NODE, task, template_id, task_id)
+                self.send_msg(node_sock, self.Actions.SEND_TASK_TO_NODE, task, task.template_id, task_id)
 
     def handle_results(self):
         while True:
@@ -1258,7 +1291,8 @@ class ClusterServer:
                 self.write_socks.remove(socket_object)
             self.read_socks.remove(socket_object)
             socket_object.close()
-            sock.node_failure()
+            sock.connection_failure(self.user_task_queue)
+            sock.connection_type = self.ConnectionStatus.DISCONNECTED
         logger.info(f"[CONNECTION CLOSED] connection from {sock.ip}, {sock.port} had been closed")
 
     @staticmethod
@@ -1307,12 +1341,12 @@ class ClusterServer:
 
 
 class TaskMaker:
-    def __init__(self, tree, inject_index, instructions, params_name):
+    def __init__(self, tree, inject_index, instructions, params_name, template_id):
         self.tree = tree
         self.index = inject_index
         self.instructions = cycle(instructions)
         self.params_name = params_name
-        self.params = None
+        self.template_id = template_id
 
     @property
     def instruction_block(self):
@@ -1337,13 +1371,14 @@ class TaskMaker:
 
         return ast.parse(ast.unparse(tree))
 
-    def to_executable(self):
-        return ExecutableTree(self.finalize(), self.params_name, self.params)
+    def to_executable(self, params):
+        return ExecutableTree(self.finalize(), self.template_id, self.params_name, params)
 
 
 class ExecutableTree:
-    def __init__(self, tree, params_name, params):
+    def __init__(self, tree, template_id, params_name, params):
         self.tree = tree
+        self.template_id = template_id
         self.params_name = params_name
         self.params = params
 

@@ -3,7 +3,7 @@ import time
 
 def is_prime(number):
     # Simulate a calculation
-    time.sleep(0.01)
+    time.sleep(1)
 
     # Check if the number is 1 or less
     if number <= 1:
@@ -18,7 +18,7 @@ def is_prime(number):
     return True
 
 
-highest_number = 100
+highest_number = 50
 primes = [0 for _ in range(highest_number)]
 for num in range(1, highest_number):
     result = is_prime(num)

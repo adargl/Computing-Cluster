@@ -8,8 +8,9 @@ from Logger import CustomFormatter
 
 
 class ExecutableTree:
-    def __init__(self, tree, params_name, params):
+    def __init__(self, tree, template_id, params_name, params):
         self.tree = tree
+        self.template_id = template_id
         self.params_name = params_name
         self.params = params
 
