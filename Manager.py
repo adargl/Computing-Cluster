@@ -132,6 +132,13 @@ class ClusterVisitor(ast.NodeVisitor):
         self.builtin_funcs = set()
 
     def get_current_container(self, node):
+        """Return the container (ast node with a body attribute) that contains the provided node.
+
+        If no container had been visited yet, the function returns an ast.Module object. Otherwise,
+        out of the fitting containers, the most recent one is returned.
+
+        """
+
         current_container = self.module_node
         while self.container_stack and not self.is_within(node, self.container_stack[-1]):
             self.container_stack.pop()
@@ -141,17 +148,23 @@ class ClusterVisitor(ast.NodeVisitor):
         return current_container
 
     def update_container_stack(self, node):
+        """Update the container stack. Called each time a new container is encountered."""
+
         while self.container_stack and not self.is_within(node, self.container_stack[-1]):
             self.container_stack.pop()
         self.container_stack.append(node)
 
     @staticmethod
     def is_within(node, container):
+        """Return True if a node is within the line number range of a container or False otherwise."""
+
         if isinstance(container, ast.Module):
             return True
         return container.lineno < node.lineno <= container.end_lineno
 
     def is_builtin(self, node):
+        """Return True if a node is a python builtin name or False otherwise."""
+
         if not isinstance(node, (ast.Call, ast.Name)):
             return False
         elif isinstance(node, ast.Call):
@@ -165,34 +178,47 @@ class ClusterVisitor(ast.NodeVisitor):
         return node.id not in self.functions.keys() and (node.id in self.builtin_funcs or node.id in dir(builtins))
 
     def is_external_function(self, node):
+        """Return True if a node is a non-user written function or False otherwise."""
+
         if not isinstance(node, ast.Call):
             return False
         return not (isinstance(node.func, ast.Name) and node.func.id in self.functions.keys())
 
     def generic_visit(self, node):
+        """Override 'generic_visit' to update the container stack with each container node encountered."""
+
         if has_body(node):
             self.update_container_stack(node)
         super().generic_visit(node)
 
     def visit_Module(self, node):
+        """Override 'visit_Module' to save a reference to the root node of the ast tree."""
+
         self.module_node = node
         self.generic_visit(node)
 
     def visit_Import(self, node):
+        """Override 'visit_Import' to save all imported nodes."""
+
         self.imports["import"].append(node)
 
     def visit_ImportFrom(self, node):
+        """Override 'visit_ImportFrom' to save all imported nodes."""
+
         self.imports["from"].append(node)
 
     def visit_FunctionDef(self, node, initial=True):
-        # If the function is called from within the code (initial=False), perform recursive visiting
-        # Otherwise if it's called on a function definition (initial=True) save its information
+        """Override 'visit_FunctionDef' to save information about all functions.
 
-        # Update the current function variable with every visit
+        If 'visit_FunctionDef' is called initially, it creates and saves a new Function object. Otherwise,
+        if 'visit_FunctionDef' is called a second time, it means that the function was used in the program. In such
+        case, the function is visited to collect further information.
+
+        """
+
         if initial:
             function = self.Function(node, self.get_current_container(node))
             self.current_func = function
-            # Save the function node and name
             self.functions[node.name] = function
         else:
             function = self.functions[node.name]
@@ -202,13 +228,21 @@ class ClusterVisitor(ast.NodeVisitor):
                 self.current_func.set_visited()
 
     def visit_For(self, node):
+        """Override 'visit_For' to call a custom visit."""
+
         self.visit_loop(node, ObjectType.FOR)
 
     def visit_While(self, node):
+        """Override 'visit_While' to call a custom visit."""
+
         self.visit_loop(node, ObjectType.WHILE)
 
     def visit_Assign(self, node):
-        # Find out weather the assignment expression contains a thread
+        """Override 'visit_Assign' to find out weather an assignment node contains the creation of a new
+         thread.
+
+         """
+
         if isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Attribute) \
                 and node.value.func.attr == 'Thread':
             name = node.targets[0]
@@ -223,7 +257,11 @@ class ClusterVisitor(ast.NodeVisitor):
             self.generic_visit(node)
 
     def visit_Expr(self, node):
-        # Find out weather the expression contains a start() or join() call on a thread
+        """Override 'visit_Expr' to find out weather an expression node contains a start() or join() call on a
+        thread.
+
+         """
+
         if isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Attribute):
             function = node.value.func
             if isinstance(function.value, ast.Name):
@@ -236,6 +274,12 @@ class ClusterVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Call(self, node):
+        """Override 'visit_Call' to examine all call nodes.
+
+        If the call node encountered is user written and contained by a loop, set the loop as nested.
+
+        """
+
         if not self.is_external_function(node):
             func_name = node.func.id if isinstance(node.func, ast.Name) else None
             if not func_name:
@@ -258,6 +302,13 @@ class ClusterVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_loop(self, node, loop_type):
+        """Add a custom visit functionality to For and While loops.
+
+        If a loop is within another loop, set the outer loop as nested.
+        if a loop is within a function, set the loop as a loop within a function.
+
+        """
+
         if not self.is_within(node, self.current_loop):
             loop = self.Loop(node, self.get_current_container(node), loop_type)
             self.loops.append(loop)
@@ -283,6 +334,8 @@ class ClusterVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def create_thread(self, assign_node, name):
+        """Create a new Thread object."""
+
         call_node = assign_node.value
         args = func_name = None
         for keyword in call_node.keywords:
@@ -301,6 +354,8 @@ class ClusterVisitor(ast.NodeVisitor):
             function.set_used()
 
     def find_nested_functions(self, node):
+        """Find all user written function calls within a node, and set them as nested."""
+
         for child_node in ast.walk(node):
             if isinstance(child_node, ast.Call) and isinstance(child_node.func, ast.Name) \
                     and not self.is_builtin(child_node):
@@ -344,16 +399,27 @@ class ClusterModifier(ast.NodeTransformer):
 
     @staticmethod
     def exhaust_generator(item, generator):
+        """Iterate through a generator object until generator is exhausted or the item is found."""
+
         for value in generator:
             if value is item:
                 break
 
     @staticmethod
     def lineno_difference(node1, node2):
+        """Return line number difference between 2 nodes."""
+
         return abs(node2.lineno - node1.end_lineno)
 
     @staticmethod
     def thread_to_instructions(thread):
+        """Return the instructions created out of a ClusterVisitor.Thread object.
+
+        Instructions are a collection of ast nodes, that are crucial for the creation of each template object aka
+        a TaskMaker.
+
+        """
+
         func_str = f"{thread.func_name}("
         for arg in thread.parameters:
             func_str += f"{arg}, "
@@ -363,10 +429,20 @@ class ClusterModifier(ast.NodeTransformer):
 
     @staticmethod
     def loop_to_instructions(loop_copy):
+        """Yield the instructions created out of a ClusterVisitor.Loop object.
+
+        Instructions are a collection of ast nodes, that are crucial for the creation of each template object aka
+        a TaskMaker.
+        A loop copy is used, since the original loop could also be modified later.
+
+        """
+
         yield loop_copy.node.body
 
     @property
     def param_dict(self):
+        """Return an ast.Dict node that maps all of the parameters to their current values."""
+
         if not self.current_params:
             return "dict()"
         param_dict = "{"
@@ -378,6 +454,8 @@ class ClusterModifier(ast.NodeTransformer):
 
     @property
     def get_results(self):
+        """Return an ast.Assign node that will await the cluster execution results."""
+
         return str_to_ast_node(
             f"{self.names['parameters']} = {self.names['mediator_object']}.{self.names['await']}"
             f"({self.templates_count})"
@@ -385,6 +463,8 @@ class ClusterModifier(ast.NodeTransformer):
 
     @property
     def normal_processing_request(self):
+        """Return an ast.Expr node that will send a generic processing request to the server."""
+
         return str_to_ast_node(
             f"{self.names['mediator_object']}.{self.names['processing_request']}"
             f"({self.templates_count}, {self.param_dict})"
@@ -392,6 +472,8 @@ class ClusterModifier(ast.NodeTransformer):
 
     @property
     def while_processing_request(self):
+        """Return an ast.Expr node that will send a while processing request to the server."""
+
         return str_to_ast_node(
             f"for _ in range({self.max_while_tasks}):"
             f"  {self.names['mediator_object']}.{self.names['while_processing_request']}"
@@ -399,6 +481,8 @@ class ClusterModifier(ast.NodeTransformer):
         )
 
     def assign_results_nodes(self, param_names):
+        """Yield a collection of nodes that will assign back the results of a cluster execution."""
+
         variable_name = "param_names"
         yield str_to_ast_node(f"{variable_name} = {self.names['parameters']}.keys()")
 
@@ -409,28 +493,44 @@ class ClusterModifier(ast.NodeTransformer):
             )
 
     def params_to_instructions(self):
+        """Return the instructions created out of the current params.
+
+        Instructions are a collection of ast nodes, that are crucial for the creation of each template object aka
+        a TaskMaker.
+
+        """
+
         for param in self.current_params:
             assign_node = str_to_ast_node(f"{param} = {self.names['parameters']}['{param}']")
             self.instructions.append(assign_node)
 
     def setup_tree(self):
+        """Perform all of the necessary changes to setup the ast.Module node before being modified."""
+
         module_node = self.visitor.module_node
-        count = 0
+        counter = 0
         # Import the mediator class
         new_import_node = str_to_ast_node(
             f"from {self.names['mediator_class']} import {self.names['mediator_class']}"
         )
-        module_node.body.insert(count, new_import_node)
+        module_node.body.insert(counter, new_import_node)
 
         # Create and inject the mediator object
-        while isinstance(module_node.body[count], (ast.FunctionDef, ast.Import, ast.ImportFrom)):
-            count += 1
+        while isinstance(module_node.body[counter], (ast.FunctionDef, ast.Import, ast.ImportFrom)):
+            counter += 1
         new_obj_node = str_to_ast_node(
             f"{self.names['mediator_object']} = {self.names['mediator_class']}({self.names['user_sock_id']})"
         )
-        module_node.body.insert(count, new_obj_node)
+        module_node.body.insert(counter, new_obj_node)
 
     def setup_loop(self, loop):
+        """Collect additional information about the loop and it's contents.
+
+        This function collects important information, such param names that should be passed into a processing
+        request. The params enable a clean execution of each task individually on Node computer.
+
+        """
+
         for i, node in enumerate(loop.node.body):
             if has_body(node):
                 continue
@@ -440,7 +540,6 @@ class ClusterModifier(ast.NodeTransformer):
                     loop.node.body = loop.node.body[:i]
                     break
 
-        # Find out which parameters should be passed into the processing request
         if not loop.is_within_func:
             self.all_params.update(self.visitor.parameters)
         else:
@@ -469,6 +568,8 @@ class ClusterModifier(ast.NodeTransformer):
         self.current_params = shared_params
 
     def modify_loop(self, loop):
+        """Perform necessary modifications on a ClusterVisitor.Loop object."""
+
         loop.freeze()
         self.generic_visit(loop.snapshot.node)
         self.instructions = self.loop_to_instructions(loop.snapshot)
@@ -495,6 +596,8 @@ class ClusterModifier(ast.NodeTransformer):
             )
 
     def setup_threads(self):
+        """Return a dictionary of all ClusterVisitor.Thread objects sorted by container."""
+
         sorted_by_container = dict()
         for thread in self.visitor.threads:
             if thread.start_call and thread.join_call:
@@ -508,6 +611,8 @@ class ClusterModifier(ast.NodeTransformer):
         return sorted_by_container
 
     def modify_threads(self, sorted_by_container):
+        """Perform necessary modifications on all of the ClusterVisitor.Thread objects."""
+
         for container, threads in sorted_by_container.items():
             threads.sort(key=lambda t: t.join_call.lineno)
             last_thread = threads[0]
@@ -549,12 +654,16 @@ class ClusterModifier(ast.NodeTransformer):
             self.create_template()
 
     def custom_modify(self, obj):
+        """Call the modify function that corresponds to the object type."""
+
         enum_type = ObjectType(type(obj))
         method = 'modify_' + str(enum_type)
-        visitor = getattr(self, method)
-        visitor(obj)
+        modifier = getattr(self, method)
+        modifier(obj)
 
     def add_new_nodes(self, container_node, add_after=None, add_before=None):
+        """Adds several (or only one) ast nodes before or after a specific ast node in a given container."""
+
         if add_after:
             self.generic_visit(container_node, None,
                                "is_custom_visit", "is_container_node", "add",
@@ -565,6 +674,12 @@ class ClusterModifier(ast.NodeTransformer):
                                add_before=add_before)
 
     def generic_visit(self, node, modified_nodes=None, *flags, **operations):
+        """Return the provided node after being modified.
+
+        Override 'generic_visit' to add node replacement, deletion & addition functionalities. Moreover, keep the
+        original functionality when needed and provide thread support and handling.
+
+        """
 
         def extract_flags_and_operations():
             allowed_flags = ["is_custom_visit", "is_container_node", "visit_threads", "add"]
@@ -677,11 +792,25 @@ class ClusterModifier(ast.NodeTransformer):
         return super().generic_visit(node)
 
     def visit_Global(self, node):
+        """Return None to delete all visited Global nodes.
+
+        Override 'visit_Global' to save all visited ast.Global nodes and remove them from their original location.
+        Mostly called on Globals within a loop object.
+
+        """
+
         self.global_nodes.append(node)
         self.generic_visit(node)
         return None
 
     def visit_Name(self, node):
+        """Return a modified ast.Name object to replace the original.
+
+        Override 'visit_Name' to save all visited names when visit_params flag is on. When flag is off, modifies the
+        Name node respectably. Mostly called on Names within a loop object.
+
+        """
+
         if not (self.visitor.is_builtin(node) or node.id in self.visitor.functions.keys()):
             if self.visit_params:
                 self.current_params.add(node.id)
@@ -694,6 +823,13 @@ class ClusterModifier(ast.NodeTransformer):
         return node
 
     def visit_While(self, node):
+        """Return a modified ast.While object to replace the original.
+
+        Override 'visit_While' to modify and handle it's original test attribute. The test attribute is the condition
+        that determines weather the while loop should stop.
+
+        """
+
         if self.visit_params:
             new_condition = ast.Name(id=self.names['condition'], ctx=ast.Load())
             condition, node.test = node.test, new_condition
@@ -705,6 +841,9 @@ class ClusterModifier(ast.NodeTransformer):
         return node
 
     def create_template(self):
+        """Create a new template object aka a TaskMaker based on all of the information that was collected since
+        the last template."""
+
         template = ast.Module(
             body=self.imports + self.original_functions + [self.assign_params_node],
             type_ignores=[]
@@ -717,13 +856,19 @@ class ClusterModifier(ast.NodeTransformer):
         self.templates_count += 1
 
     def create_templates(self):
-        def to_modify_loop(current_loop) -> bool:
+        """Handle the creation of all templates.
+
+        Use the information that was provided in the constructor, in order to Manage the creation of all templates.
+        After information is collected via modify and setup functions, creates a new template with the updated info.
+        """
+
+        def modify_loop(current_loop) -> bool:
             if not current_loop.is_nested or current_loop.is_within_loop:
                 return False
             return True
 
         for loop in self.visitor.loops:
-            if to_modify_loop(loop):
+            if modify_loop(loop):
                 self.visit_params = True
                 self.setup_loop(loop)
                 self.visit_params = False
@@ -735,6 +880,8 @@ class ClusterModifier(ast.NodeTransformer):
         self.modify_threads(sorted_by_container)
 
     def clear_data(self):
+        """Clear all necessary data. Called after each template creation."""
+
         self.current_params.clear()
         self.all_params.clear()
         self.manually_marked_nodes.clear()
@@ -833,26 +980,38 @@ class ClusterServer:
             logger.info(f"[CONNECTION ESTABLISHED] connection has been established from {ip}, {port}")
 
         def __hash__(self):
+            """Return a custom identifier for each of sock."""
+
             return self.id
 
         def __eq__(self, other):
+            """Return True if 2 sock objects or equal or False otherwise."""
+
             if isinstance(other, self.__class__):
                 return self.id == other.id
             return False
 
         def __enter__(self):
+            """Return a non-custom socket object. Called each time a context manager is entered."""
+
             self.lock.acquire()
             return self.sock
 
         def __exit__(self, exc_type, exc_val, exc_tb):
+            """Called each time a context manager is exited."""
+
             self.lock.release()
 
         @property
         def currently_handling_while(self):
+            """Return True if sock is currently handling a group of while requests or False otherwise."""
+
             return self._socket_is_handling_while
 
         @currently_handling_while.setter
         def currently_handling_while(self, bool_value):
+            """Clear all necessary data each time request type changes and is not while."""
+
             if bool_value:
                 self._socket_is_handling_while = True
             else:
@@ -863,9 +1022,17 @@ class ClusterServer:
                 self._socket_is_handling_while = False
 
         def init_id_to_task(self):
+            """Initialize the list of ongoing tasks."""
+
             self.id_to_task = [None for _ in range(self.max_while_tasks)]
 
         def map_task_id_to_req_id(self, task_id):
+            """Map the task id to a request id.
+
+            When a response from a node is received on the server, it can trace back the original request id.
+
+            """
+
             new_id = next(self.req_id)
             if new_id == self.max_while_tasks:
                 self.init_id_to_task()
@@ -876,6 +1043,12 @@ class ClusterServer:
             self.task_id_to_req_id[task_id] = new_id
 
         def set_connection_type(self, connection_type, user_id=0):
+            """Set the connection type of a sock.
+
+            Connection type is usually one of 3: user, mediator or node.
+
+            """
+
             def clear_user_data():
                 self.user_id = 0
                 self.mediator_sock = None
@@ -923,9 +1096,18 @@ class ClusterServer:
                 return
 
         def time_stamp_action(self, action, ip=None):
+            """Timestamp each action as it happens."""
+
             self.time_stamps.append((time(), action, ip if ip else self.ip))
 
         def handle_user_input(self, file):
+            """Handle user request.
+
+            This function receives an input file, visits & modifies it and then decides weather to start it's
+            execution or reject the file.
+
+            """
+
             modified_file = "Modified.py"
             byproduct_file = "Created.py"
             ast_tree = ast.parse(file)
@@ -952,6 +1134,8 @@ class ClusterServer:
                 ClusterServer.send_final_output(self, ClusterServer.ExecutionStatus.REJECTED)
 
         def add_request(self, template_id, params, while_request):
+            """Add a new task to the user task queue."""
+
             if while_request:
                 self.currently_handling_while = True
             elif self.currently_handling_while:
@@ -960,6 +1144,8 @@ class ClusterServer:
             self.task_queue.put(task)
 
         def get_request(self):
+            """Return a task. Called before sending a task to a node on the cluster."""
+
             if not self.restored_tasks.empty():
                 return self.restored_tasks.get()
             elif self.task_queue.empty():
@@ -967,22 +1153,44 @@ class ClusterServer:
             return self.task_queue.get()
 
         def add_task(self, user_sock, task):
+            """Return an id that is used to retrieve a mediator socket.
+
+            When a response from a node is received on the server, it can trace back the original mediator socket it
+            came from.
+
+            """
+
             new_id = next(self.task_id)
             self.ongoing_tasks[new_id] = task
             self.task_to_sock[new_id] = user_sock
             return new_id
 
         def get_task(self, template_id, params):
+            """Return a new task."""
+
             template = self.templates[template_id]
             task = template.to_executable(params)
             return task
 
         def get_result(self):
+            """Return a result to a group of task.
+
+            Typically used when all tasks of a task group were handled. Can be called several time on each template,
+            since each template contains one or more task groups.
+
+            """
+
             template_id, current_result = self.template_id, self.results[self.template_id]
             self.get_results = False
             return template_id, current_result
 
         def update_while_result(self, task_id, original, params):
+            """Update the current result. Called with each processing response received.
+
+            'update_while_result' keeps track of the order in which requests are sent and addresses them respectably.
+
+            """
+
             request_id = self.task_id_to_req_id.get(task_id)
             if request_id is None:
                 raise RuntimeError
@@ -1004,6 +1212,12 @@ class ClusterServer:
                 self.while_highest_handled_id += 1
 
         def update_result(self, original, params):
+            """Update the current result. Called with each processing response received.
+
+            'update_result' doesn't keep track of the order in which requests are sent.
+
+            """
+
             new = {p: params[p] for p in original if p in params}
 
             if new:
@@ -1040,6 +1254,8 @@ class ClusterServer:
                                 response[key] = new_value
 
         def restore_tasks(self, server_user_queue):
+            """Restore all tasks the were ongoing on a node while it failed."""
+
             for task_id, task in self.ongoing_tasks.items():
                 user_sock = self.task_to_sock[task_id]
                 with user_sock:
@@ -1048,6 +1264,8 @@ class ClusterServer:
                 server_user_queue.put(user_sock)
 
         def connection_failure(self, server_user_queue):
+            """Handle a connection failure."""
+
             if self.connection_type == ClusterServer.ConnectionStatus.NODE:
                 self.restore_tasks(server_user_queue)
 
@@ -1078,6 +1296,8 @@ class ClusterServer:
         self.init_connection()
 
     def init_connection(self):
+        """Initialize all handler threads."""
+
         self.main_sock.bind(self.addr)
         self.main_sock.listen(self.max_queue)
         self.read_socks = [self.main_sock]
@@ -1090,6 +1310,32 @@ class ClusterServer:
         request_handler.start()
 
     def handle_connection(self):
+        """Handle all server traffic.
+
+        This function uses select to handle traffic in a non-blocking way. Receiving message protocol is as
+        following:
+
+      Operation code | Recipient | Explanation
+        0 | Reserved |
+        1 | Server   | Mediator requests the services of the cluster [generic type]
+        2 | Server   | Mediator requests the services of the cluster [while type]
+        3 | Mediator | The server returns a response for a group of requests
+        4 | Server   | Mediator asks for an answer to a group of it's requests
+        5 | Server   | A node announces that it is ready to accept tasks
+        6 | Node     | The server sends a processing request to a task
+        7 | Server   | The server receives a processing response back
+        8 | Server   | The server receives that a processing response failed
+        9 | Server   | Request to connect as a mediator
+       10 | Server   | Request to connect as a node
+       11 | Server   | Request to connect as a user
+       12 | Server   | User sends an input file as a request
+       13 | User     | The server sends a final response for a user
+       14 |  * * *   | An unrecognized op code was received
+
+        Note: Utilize the Actions Enum class that automatically converts op codes.
+
+        """
+
         actions = self.Actions
         while not self.close_connections:
             readable, writeable, exceptions = select.select(self.read_socks, self.write_socks, self.read_socks)
@@ -1112,8 +1358,8 @@ class ClusterServer:
                         sock = custom_sock
                         action, optional, reserved, data = packet
                         if action == actions.UNDEFINED_CODE:
-                            continue
-                        if action == actions.PROCESSING_REQUEST or action == actions.WHILE_PROCESSING_REQUEST:
+                            pass
+                        elif action == actions.PROCESSING_REQUEST or action == actions.WHILE_PROCESSING_REQUEST:
                             template_id = optional
                             sock.add_request(template_id, data, action == actions.WHILE_PROCESSING_REQUEST)
                             self.user_task_queue.put(sock)
@@ -1180,6 +1426,13 @@ class ClusterServer:
             self.close_sock(sock)
 
     def send_msg(self, sock, action, msg=None, optional=0, reserved=0):
+        """Main message sending protocol over the sockets.
+
+        Each message is sent in 5 fields: | length | op code | optional | reserved | message |
+        'send_msg' utilizes the serializing functionalities of struct.pack and pickle.dumps.
+
+        """
+
         pickled_msg = pickle.dumps(msg)
         op_code = action.value
         pickled_msg = pack('>4I', len(pickled_msg), op_code, optional, reserved) + pickled_msg
@@ -1189,6 +1442,13 @@ class ClusterServer:
             socket_object.sendall(pickled_msg)
 
     def recv_msg(self, sock):
+        """Main message receiving protocol over the sockets.
+
+        Each message is received in 5 fields: | length | op code | optional | reserved | message |
+        'recv_msg' utilizes the deserializing functionalities of struct.unpack and pickle.loads.
+
+        """
+
         with sock as socket_object:
             raw_header = None
             try:
@@ -1237,6 +1497,12 @@ class ClusterServer:
         return action, optional, reserved, msg
 
     def recv_limited_bytes(self, sock, n):
+        """Return a limited amount of bytes waiting on the socket.
+
+        This is a helper function that allows the reading of limited amounts of bytes.
+
+        """
+
         data = bytearray()
         while len(data) < n:
             packet = sock.recv(n - len(data))
@@ -1246,6 +1512,8 @@ class ClusterServer:
         return data
 
     def handle_tasks(self):
+        """Handle all task sending."""
+
         while True:
             if self.user_task_queue.empty() or self.node_queue.empty():
                 with self.task_condition:
@@ -1271,6 +1539,8 @@ class ClusterServer:
                 self.send_msg(node_sock, self.Actions.SEND_TASK_TO_NODE, task, task.template_id, task_id)
 
     def handle_results(self):
+        """Handle all response sending."""
+
         while True:
             with self.result_condition:
                 self.result_condition.wait()
@@ -1283,6 +1553,8 @@ class ClusterServer:
             logger.info(f"[RESPONSE SENT] response parameters (id={result_id}): {result}")
 
     def close_sock(self, sock):
+        """Close a socket. Called on a socket that was either disconnected or encountered an exception."""
+
         with self.lock:
             if sock in self.all_socks:
                 del self.all_socks[sock]
@@ -1297,10 +1569,19 @@ class ClusterServer:
 
     @staticmethod
     def raise_exception(additional_text, exception):
+        """Raise an error on the logger."""
+
         logger.error(f"[ERROR ENCOUNTERED] {additional_text}: {exception}")
 
     @classmethod
     def exec_tree(cls, sock, tree, file_name=''):
+        """Execute the user ast tree after it was modified.
+
+        A separate thread on the server that handles the mediator cluster execution, measures the rtt sum and provides
+        the user with a response after being finished (or failing).
+
+        """
+
         start_time = perf_counter()
         std_out = StringIO()
         with redirect_stdout(std_out):
@@ -1330,6 +1611,13 @@ class ClusterServer:
 
     @classmethod
     def send_final_output(cls, sock, status, result=None, runtime=None, communication=None):
+        """Secondary message sending protocol that is used exclusively for user responses.
+
+        Each message is sent in 5 fields: | len1 | len2 | len3 | len4 | all 4 messages as one string |
+        'send_msg' utilizes the serializing functionalities of struct.pack and pickle.dumps.
+
+        """
+
         status, runtime = pickle.dumps(status.value), pickle.dumps(runtime)
         result, communication = pickle.dumps(result), pickle.dumps(communication)
 
@@ -1350,10 +1638,14 @@ class TaskMaker:
 
     @property
     def instruction_block(self):
+        """Return the next instruction block."""
+
         return next(self.instructions)
 
     @staticmethod
     def extend_in_index(lst, iterable, index):
+        """Insert an iterable into a list with a given index."""
+
         if is_iterable(iterable):
             for counter, item in enumerate(iterable):
                 lst.insert(index + counter, item)
@@ -1361,6 +1653,8 @@ class TaskMaker:
             lst.insert(index, iterable)
 
     def finalize(self):
+        """Return a completed ast tree that can be executed on a Node computer."""
+
         tree = deepcopy(self.tree)
         block = self.instruction_block
         self.extend_in_index(tree.body, block, self.index)
@@ -1372,6 +1666,8 @@ class TaskMaker:
         return ast.parse(ast.unparse(tree))
 
     def to_executable(self, params):
+        """Return an ExecutableTree object which is the representation of a task."""
+
         return ExecutableTree(self.finalize(), self.template_id, self.params_name, params)
 
 
@@ -1383,10 +1679,14 @@ class ExecutableTree:
         self.params = params
 
     def exec_tree(self):
+        """Execute the object's ast tree."""
+
         exec(ast.unparse(self.tree), {self.params_name: self.params})
 
 
 def str_to_ast_node(string: str):
+    """Return a parsed ast out of a given code string."""
+
     module = ast.parse(string)
     if len(module.body) == 1:
         node = module.body[0]
@@ -1396,10 +1696,14 @@ def str_to_ast_node(string: str):
 
 
 def is_iterable(obj: object):
+    """Return True if an object is an iterable or False otherwise."""
+
     return hasattr(obj, '__iter__')
 
 
 def has_body(ast_node):
+    """Return True if an ast node has a body (meaning if it is a container node) or False otherwise."""
+
     return hasattr(ast_node, 'body') and is_iterable(ast_node.body)
 
 

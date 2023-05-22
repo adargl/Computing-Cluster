@@ -31,15 +31,31 @@ class BaseClient:
         self.conn_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
     def init_connection(self):
+        """Initialize the connection with the server."""
+
         self.conn_sock.connect(self.server_addr)
 
     def send_msg(self, sock, action, msg=None, optional=0, reserved=0):
+        """Main message sending protocol over the sockets.
+
+        Each message is sent in 5 fields: | length | op code | optional | reserved | message |
+        'send_msg' utilizes the serializing functionalities of struct.pack and pickle.dumps.
+
+        """
+
         op_code = action.value
         pickled_msg = pickle.dumps(msg)
         pickled_msg = pack('>4I', len(pickled_msg), op_code, optional, reserved) + pickled_msg
         sock.sendall(pickled_msg)
 
     def recv_msg(self, sock):
+        """Main message receiving protocol over the sockets.
+
+        Each message is received in 5 fields: | length | op code | optional | reserved | message |
+        'recv_msg' utilizes the deserializing functionalities of struct.unpack and pickle.loads.
+
+        """
+
         raw_header = self.recv_limited_bytes(sock, 16)
         if not raw_header:
             return None
@@ -50,6 +66,12 @@ class BaseClient:
         return action, optional, reserved, msg
 
     def recv_limited_bytes(self, sock, n):
+        """Return a limited amount of bytes waiting on the socket.
+
+        This is a helper function that allows the reading of limited amounts of bytes.
+
+        """
+
         data = bytearray()
         while len(data) < n:
             packet = sock.recv(n - len(data))
@@ -59,10 +81,16 @@ class BaseClient:
         return data
 
     def connect_as_mediator(self, user_sock_id):
+        """Send a request to connect as a mediator."""
+
         self.send_msg(self.conn_sock, self.Actions.CONNECT_AS_MEDIATOR, user_sock_id)
 
     def connect_as_user(self):
+        """Send a request to connect as a user."""
+
         self.send_msg(self.conn_sock, self.Actions.CONNECT_AS_USER)
 
     def connect_as_node(self):
+        """Send a request to connect as a node."""
+
         self.send_msg(self.conn_sock, self.Actions.CONNECT_AS_NODE)

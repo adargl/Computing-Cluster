@@ -10,13 +10,19 @@ class User(BaseClient):
         super().__init__(server_ip, server_port, send_format, buffer_size)
 
     def init_connection(self):
+        """Initialize the connection with the server."""
+
         super().init_connection()
         self.connect_as_user()
 
     def cluster_exec(self, file):
+        """Send a request to use the cluster services."""
+
         self.send_msg(self.conn_sock, self.Actions.USER_INPUT_FILE, file)
 
     def recv_final_output(self):
+        """Return the final response of cluster."""
+
         raw_header = self.recv_limited_bytes(self.conn_sock, 16)
         if not raw_header:
             return None
@@ -29,6 +35,8 @@ class User(BaseClient):
         return status, runtime, result, communication
 
     def connect_as_user(self):
+        """Send a request to connect as a user."""
+
         super().connect_as_user()
         logger.info(f"[CONNECTION REQUEST] request sent to connect as a user")
 
