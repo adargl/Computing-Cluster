@@ -116,7 +116,7 @@ class ClusterVisitor(ast.NodeVisitor):
         self.names = {"parameters": parameters_name, "mediator_class": "Mediator", "mediator_object": "cluster",
                       "processing_request": "send_request", "while_processing_request": "send_while_request",
                       "template_change": "template_change", "await": "get_results", "condition": condition_name,
-                      "user_sock_id": user_sock_id}
+                      "user_sock_id": user_sock_id, "end_connection": "close_connection"}
         self.module_node = None
 
         self.current_func = self.Function.empty_instance()
@@ -391,6 +391,9 @@ class ClusterModifier(ast.NodeTransformer):
         self.assign_params_node = str_to_ast_node(
             f"globals().update({self.names['parameters']})"
         )
+        self.close_connection_node = str_to_ast_node(
+            f"{self.names['mediator_object']}.{self.names['end_connection']}()"
+        )
         self.while_condition = str_to_ast_node(
             f"{self.names['condition']} = True"
         )
@@ -522,6 +525,9 @@ class ClusterModifier(ast.NodeTransformer):
             f"{self.names['mediator_object']} = {self.names['mediator_class']}({self.names['user_sock_id']})"
         )
         module_node.body.insert(counter, new_obj_node)
+
+        # Add socket closing
+        module_node.body.append(self.close_connection_node)
 
     def setup_loop(self, loop):
         """Collect additional information about the loop and it's contents.
@@ -1524,6 +1530,9 @@ class ClusterServer:
                     if sock_object not in self.write_socks:
                         continue
                 user_sock = self.user_task_queue.get()
+                if user_sock.connection_type == self.ConnectionStatus.DISCONNECTED:
+                    self.node_queue.put(node_sock)
+                    continue
                 with user_sock:
                     user_sock.unhandled_requests += 1
                     task = user_sock.get_request()
@@ -1547,6 +1556,8 @@ class ClusterServer:
             if self.user_result_queue.empty():
                 continue
             user_sock = self.user_result_queue.get()
+            if user_sock.connection_type == self.ConnectionStatus.DISCONNECTED:
+                continue
             with user_sock:
                 result_id, result = user_sock.get_result()
             self.send_msg(user_sock, self.Actions.PROCESSING_RESPONSE, result)
@@ -1554,6 +1565,9 @@ class ClusterServer:
 
     def close_sock(self, sock):
         """Close a socket. Called on a socket that was either disconnected or encountered an exception."""
+
+        if sock.connection_type == self.ConnectionStatus.DISCONNECTED:
+            return
 
         with self.lock:
             if sock in self.all_socks:
@@ -1565,7 +1579,7 @@ class ClusterServer:
             socket_object.close()
             sock.connection_failure(self.user_task_queue)
             sock.connection_type = self.ConnectionStatus.DISCONNECTED
-        logger.info(f"[CONNECTION CLOSED] connection from {sock.ip}, {sock.port} had been closed")
+        logger.error(f"[CONNECTION CLOSED] connection from {sock.ip}, {sock.port} had been closed")
 
     @staticmethod
     def raise_exception(additional_text, exception):

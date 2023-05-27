@@ -94,3 +94,8 @@ class BaseClient:
         """Send a request to connect as a node."""
 
         self.send_msg(self.conn_sock, self.Actions.CONNECT_AS_NODE)
+
+    def close_connection(self):
+        """Close the connection with the server."""
+
+        self.conn_sock.close()
