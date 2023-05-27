@@ -1027,6 +1027,10 @@ class ClusterServer:
                 self.unhandled_requests = 0
                 self._socket_is_handling_while = False
 
+        @property
+        def is_disconnected(self):
+            return self.connection_type == ClusterServer.ConnectionStatus.DISCONNECTED
+
         def init_id_to_task(self):
             """Initialize the list of ongoing tasks."""
 
@@ -1274,6 +1278,11 @@ class ClusterServer:
 
             if self.connection_type == ClusterServer.ConnectionStatus.NODE:
                 self.restore_tasks(server_user_queue)
+            elif self.connection_type == ClusterServer.ConnectionStatus.MEDIATOR:
+                with self.task_queue.mutex:
+                    self.task_queue.queue.clear()
+                with self.restored_tasks.mutex:
+                    self.restored_tasks.queue.clear()
 
     def __init__(self, port=55555, send_format="utf-8", buffer_size=1024, max_queue=5, max_while_tasks=15):
         self.ip = "0.0.0.0"
@@ -1386,22 +1395,24 @@ class ClusterServer:
                                 original = sock.ongoing_tasks.pop(task_id)
                                 sock.executed_tasks[task_id] = original
                                 user_sock = sock.task_to_sock[task_id]
-                            org_params = original.params
-                            with user_sock:
-                                if not action == actions.TASK_FAILED:
-                                    if user_sock.currently_handling_while:
-                                        user_sock.update_while_result(task_id, org_params, new_params)
-                                    else:
-                                        user_sock.update_result(org_params, new_params)
 
-                                if user_sock.unhandled_requests > 0:
-                                    user_sock.unhandled_requests -= 1
+                            if not user_sock.is_disconnected:
+                                org_params = original.params
+                                with user_sock:
+                                    if not action == actions.TASK_FAILED:
+                                        if user_sock.currently_handling_while:
+                                            user_sock.update_while_result(task_id, org_params, new_params)
+                                        else:
+                                            user_sock.update_result(org_params, new_params)
 
-                                if user_sock.get_results and user_sock.task_queue.empty() \
-                                        and user_sock.unhandled_requests == 0:
-                                    self.user_result_queue.put(user_sock)
-                                    with self.result_condition:
-                                        self.result_condition.notify()
+                                    if user_sock.unhandled_requests > 0:
+                                        user_sock.unhandled_requests -= 1
+
+                                    if user_sock.get_results and user_sock.task_queue.empty() \
+                                            and user_sock.unhandled_requests == 0:
+                                        self.user_result_queue.put(user_sock)
+                                        with self.result_condition:
+                                            self.result_condition.notify()
 
                         elif action == actions.CONNECT_AS_MEDIATOR or action == actions.CONNECT_AS_NODE \
                                 or action == actions.CONNECT_AS_USER:
@@ -1530,7 +1541,7 @@ class ClusterServer:
                     if sock_object not in self.write_socks:
                         continue
                 user_sock = self.user_task_queue.get()
-                if user_sock.connection_type == self.ConnectionStatus.DISCONNECTED:
+                if user_sock.is_disconnected:
                     self.node_queue.put(node_sock)
                     continue
                 with user_sock:
@@ -1556,7 +1567,7 @@ class ClusterServer:
             if self.user_result_queue.empty():
                 continue
             user_sock = self.user_result_queue.get()
-            if user_sock.connection_type == self.ConnectionStatus.DISCONNECTED:
+            if user_sock.is_disconnected:
                 continue
             with user_sock:
                 result_id, result = user_sock.get_result()
@@ -1566,7 +1577,7 @@ class ClusterServer:
     def close_sock(self, sock):
         """Close a socket. Called on a socket that was either disconnected or encountered an exception."""
 
-        if sock.connection_type == self.ConnectionStatus.DISCONNECTED:
+        if sock.is_disconnected:
             return
 
         with self.lock:
