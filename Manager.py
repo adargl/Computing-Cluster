@@ -1077,15 +1077,12 @@ class ClusterServer:
                 self.while_highest_handled_id = 0
                 self.req_id = count()
                 self.result_id = 0
-                with self.task_queue.mutex:
-                    self.task_queue.queue.clear()
-                with self.restored_tasks.mutex:
-                    self.restored_tasks.queue.clear()
+                self.clear_requests()
 
             if connection_type == ClusterServer.Actions.CONNECT_AS_MEDIATOR:
                 clear_node_data()
                 clear_user_data()
-                self.templates = self._all_templates.get()
+                self.templates = self.get_next_template()
                 self.results = {i: {} for i in range(len(self.templates))}
                 self.init_id_to_task()
                 self.connection_type = ClusterServer.ConnectionStatus.MEDIATOR
@@ -1104,6 +1101,13 @@ class ClusterServer:
                     f"{ClusterServer.ConnectionStatus.USER.value} or {ClusterServer.ConnectionStatus.MEDIATOR.value} "
                     f"when initialized")
                 return
+
+        def get_next_template(self):
+            """Return the current template."""
+
+            if self._all_templates.empty():
+                return
+            return self._all_templates.get()
 
         def time_stamp_action(self, action, ip=None):
             """Timestamp each action as it happens."""
@@ -1273,16 +1277,20 @@ class ClusterServer:
                     user_sock.unhandled_requests -= 1
                 server_user_queue.put(user_sock)
 
+        def clear_requests(self):
+            """Clear all ongoing requests."""
+            with self.task_queue.mutex:
+                self.task_queue.queue.clear()
+            with self.restored_tasks.mutex:
+                self.restored_tasks.queue.clear()
+
         def connection_failure(self, server_user_queue):
             """Handle a connection failure."""
 
             if self.connection_type == ClusterServer.ConnectionStatus.NODE:
                 self.restore_tasks(server_user_queue)
             elif self.connection_type == ClusterServer.ConnectionStatus.MEDIATOR:
-                with self.task_queue.mutex:
-                    self.task_queue.queue.clear()
-                with self.restored_tasks.mutex:
-                    self.restored_tasks.queue.clear()
+                self.clear_requests()
 
     def __init__(self, port=55555, send_format="utf-8", buffer_size=1024, max_queue=5, max_while_tasks=15):
         self.ip = "0.0.0.0"
@@ -1614,6 +1622,11 @@ class ClusterServer:
                 exec(compile(tree, file_name, 'exec'), {'builtins': globals()['__builtins__'],
                                                         cls._user_sock_id: sock.user_id})
             except Exception as e:
+                if sock.mediator_sock:
+                    sock.mediator_sock.clear_requests()
+                else:
+                    sock.get_next_template()
+
                 ClusterServer.raise_exception("while executing the file encountered", e)
                 cls.send_final_output(sock, cls.ExecutionStatus.FAILED)
                 return

@@ -1,5 +1,5 @@
 import enchant.checker as chkr
-
+import time
 
 def encrypt(message, rotation):
     result = ""
@@ -35,6 +35,7 @@ def is_sentence(sentence, checker):
     Determines whether the input sentence is a proper English sentence or not.
     Returns a boolean value.
     """
+    time.sleep(0.2)
     checker.set_text(sentence)
     for _ in checker:
         return False
