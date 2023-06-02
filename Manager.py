@@ -1124,7 +1124,12 @@ class ClusterServer:
 
             modified_file = "Modified.py"
             byproduct_file = "Created.py"
-            ast_tree = ast.parse(file)
+            try:
+                ast_tree = ast.parse(file)
+            except Exception as e:
+                ClusterServer.raise_exception("while parsing the input file encountered", e)
+                ClusterServer.send_final_output(self, ClusterServer.ExecutionStatus.REJECTED)
+                return
 
             cserver = ClusterServer
             visitor = ClusterVisitor(cserver._condition_name, cserver._parameters_name, cserver._user_sock_id)

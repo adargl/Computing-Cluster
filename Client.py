@@ -56,7 +56,11 @@ class BaseClient:
 
         """
 
-        raw_header = self.recv_limited_bytes(sock, 16)
+        try:
+            raw_header = self.recv_limited_bytes(sock, 16)
+        except Exception as e:
+            return e
+
         if not raw_header:
             return None
         msg_len, op_code, optional, reserved = unpack('>4I', raw_header)

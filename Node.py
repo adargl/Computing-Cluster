@@ -33,6 +33,21 @@ class Node(BaseClient):
         self.connect_as_node()
         self.handle_connection()
 
+    def recv_msg(self, sock):
+        """Override the message receiving function to handle server disconnections."""
+
+        msg = super().recv_msg(sock)
+        if not msg:
+            return
+        elif isinstance(msg, Exception):
+            exception = msg
+            logger.error(f"[ERROR ENCOUNTERED] while receiving a message encountered: {exception}")
+            logger.error(f"[CONNECTION CLOSED] connection with server from {self.server_ip}, "
+                         f"{self.server_port} had been closed")
+            return
+
+        return msg
+
     def handle_connection(self):
         """Handle all processing requests.
 
@@ -75,6 +90,7 @@ class Node(BaseClient):
             finally:
                 if is_root:
                     self.declare_ready()
+
         return wrapper
 
     @thread_failure

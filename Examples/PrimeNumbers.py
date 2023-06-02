@@ -3,7 +3,7 @@ import time
 
 def is_prime(number):
     # Simulate a calculation
-    time.sleep(0.01)
+    time.sleep(0.1)
 
     # Check if the number is 1 or less
     if number <= 1:

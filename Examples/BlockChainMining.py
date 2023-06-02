@@ -1,5 +1,6 @@
 import hashlib
 import binascii
+import time
 
 
 def binary_form_of_hash(hash_value):
@@ -27,6 +28,8 @@ def find_nonce(block_header, difficulty):
         # Calculate the SHA-256 hash of the input string with the nonce
         hash_result = get_hash(input_str_with_nonce)
 
+        # Simulate a calculation
+        time.sleep(0.1)
         ...
         nonce += 1
 

@@ -35,7 +35,10 @@ def is_sentence(sentence, checker):
     Determines whether the input sentence is a proper English sentence or not.
     Returns a boolean value.
     """
+
+    # Simulate a calculation
     time.sleep(0.2)
+
     checker.set_text(sentence)
     for _ in checker:
         return False

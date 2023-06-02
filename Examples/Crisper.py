@@ -1,7 +1,11 @@
 import sys
+import time
 
 
 def compare(sequence1, sequence2, offset=0):
+    # Simulate a calculation
+    time.sleep(0.1)
+
     constants1 = ["NDEQ", "MILV", "FYW", "NEQK", "QHRK", "HY", "STA", "NHQK", "MILF"]
     constants2 = ["SAG", "SGND", "NEQHRK", "ATV", "STPA", "NDEEQHK", "HFY", "CSA", "STNK", "SNDEQK", "FVLIM"]
     longer_seq, shorter_seq = (sequence1, sequence2) if len(sequence1) > len(sequence2) else (sequence2, sequence1)
