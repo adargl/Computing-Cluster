@@ -1212,7 +1212,7 @@ class ClusterServer:
 
             request_id = self.task_id_to_req_id.get(task_id)
             if request_id is None:
-                raise RuntimeError
+                return
             self.id_to_task[request_id] = original, params
 
             while request_id < self.max_while_tasks and request_id == self.while_highest_handled_id:
